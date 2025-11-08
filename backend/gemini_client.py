@@ -42,12 +42,41 @@ NOTE: Code may contain multiple files marked with "# File: path". Analyze them t
 
 {metadata_str}
 
-YOUR TASK: Create a complete workflow that shows:
-1. Where input comes from (API endpoint, user input, file, etc.)
-2. How input is processed/prepared before LLM
-3. The LLM call(s)
-4. How LLM output is processed/transformed
-5. Where output goes (return statement, API response, file, database, etc.)
+YOUR TASK: Trace the EXECUTION PATH of the AI/LLM workflow ONLY.
+
+CRITICAL RULES FOR WHAT TO INCLUDE:
+1. Start from the entry point that triggers LLM processing (e.g., /analyze endpoint, main function)
+2. ONLY include functions/code that are ACTUALLY CALLED during LLM workflow execution
+3. Follow the execution flow: entry → data prep → LLM call → response processing → output
+4. Include ONLY code in the direct execution path from input to LLM to output
+
+CRITICAL RULES FOR WHAT TO EXCLUDE:
+1. Code that is imported but NEVER CALLED in the LLM workflow execution path
+2. Commented-out code or decorators (e.g., "# current_user: User = Depends(...)")
+3. Authentication/authorization code UNLESS it's actively used in the LLM workflow path
+4. Database/security/config operations UNLESS they directly support the LLM call
+5. Alternative endpoints or functions that don't lead to LLM processing
+6. Helper functions that are defined but never invoked in the LLM flow
+
+EXECUTION PATH ANALYSIS:
+- Ask: "Is this function/code actually executed when processing an LLM request?"
+- Ask: "Does data flow through this node on the way to or from the LLM?"
+- If NO to both questions → EXCLUDE from workflow
+- If imported but not called → EXCLUDE
+- If defined but not used → EXCLUDE
+
+EXAMPLE EXCLUSIONS:
+- "/login" endpoint → Not part of LLM workflow
+- "get_current_user()" if commented out → Not executed
+- "hash_password()" → Not in LLM execution path
+- Files like auth.py, config.py if not called by LLM workflow
+
+YOUR WORKFLOW SHOULD SHOW:
+1. Entry point (API endpoint, function that starts LLM processing)
+2. Data preparation (only steps actually executed)
+3. LLM call(s)
+4. Response processing (only steps actually executed)
+5. Output (where LLM result goes)
 
 IMPORTANT: Every workflow needs AT LEAST these nodes:
 - 1 trigger/input node (where does data enter?)

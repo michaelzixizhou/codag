@@ -1,11 +1,26 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { WorkflowGraph } from './api';
 
 export class WebviewManager {
     private panel: vscode.WebviewPanel | undefined;
 
     constructor(private context: vscode.ExtensionContext) {}
+
+    notifyAnalysisStarted() {
+        if (this.panel) {
+            this.panel.webview.postMessage({ command: 'analysisStarted' });
+        }
+    }
+
+    notifyAnalysisComplete(success: boolean, error?: string) {
+        if (this.panel) {
+            this.panel.webview.postMessage({
+                command: 'analysisComplete',
+                success,
+                error
+            });
+        }
+    }
 
     show(graph: WorkflowGraph) {
         if (this.panel) {
@@ -191,6 +206,7 @@ export class WebviewManager {
             padding: 2px 4px;
         }
         .edge-tooltip {
+            position: fixed;
             background: var(--vscode-editor-background);
             border: 1px solid var(--vscode-panel-border);
             border-radius: 4px;
@@ -199,12 +215,51 @@ export class WebviewManager {
             z-index: 10000;
             box-shadow: 0 2px 8px rgba(0,0,0,0.3);
             max-width: 300px;
+            pointer-events: none;
         }
         .edge-tooltip div {
             margin: 4px 0;
         }
         .edge-tooltip strong {
             color: var(--vscode-textLink-foreground);
+        }
+        .loading-indicator {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 11px;
+            z-index: 2000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: opacity 0.3s ease;
+        }
+        .loading-content {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .loading-icon {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+        .loading-indicator.success {
+            border-color: #4CAF50;
+        }
+        .loading-indicator.success .loading-icon {
+            animation: none;
+        }
+        .loading-indicator.error {
+            border-color: #f44336;
+        }
+        .loading-indicator.error .loading-icon {
+            animation: none;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
         .side-panel {
             position: fixed;
@@ -323,6 +378,12 @@ export class WebviewManager {
     </div>
     <div id="graph"></div>
     <div id="edgeTooltip" class="edge-tooltip" style="display: none;"></div>
+    <div id="loadingIndicator" class="loading-indicator" style="display: none;">
+        <div class="loading-content">
+            <span class="loading-icon">⟳</span>
+            <span class="loading-text">Analyzing workflow...</span>
+        </div>
+    </div>
     <div id="sidePanel" class="side-panel">
         <div class="panel-header">
             <h2 id="panelTitle"></h2>
@@ -354,6 +415,29 @@ export class WebviewManager {
     <script>
         const vscode = acquireVsCodeApi();
         const graphData = ${JSON.stringify(graph)};
+
+        // Calculate intersection point at rectangle boundary
+        function intersectRect(sourceNode, targetNode, nodeWidth = 50, nodeHeight = 50) {
+            const dx = sourceNode.x - targetNode.x;
+            const dy = sourceNode.y - targetNode.y;
+            const halfWidth = nodeWidth / 2;
+            const halfHeight = nodeHeight / 2;
+
+            // Determine which edge is hit first (top/bottom vs left/right)
+            if (Math.abs(dy/dx) > halfHeight/halfWidth) {
+                // Hits top or bottom edge
+                return {
+                    x: targetNode.x + dx * Math.abs(halfHeight/dy),
+                    y: targetNode.y + halfHeight * Math.sign(dy)
+                };
+            } else {
+                // Hits left or right edge
+                return {
+                    x: targetNode.x + halfWidth * Math.sign(dx),
+                    y: targetNode.y + dy * Math.abs(halfWidth/dx)
+                };
+            }
+        }
 
         const container = document.getElementById('graph');
         const width = container.clientWidth;
@@ -405,7 +489,7 @@ export class WebviewManager {
         defs.append('marker')
             .attr('id', 'arrowhead')
             .attr('viewBox', '-0 -5 10 10')
-            .attr('refX', 35)  // Increased to stop at edge of 50px square (25px radius + 10px arrow)
+            .attr('refX', 5)  // Small offset for arrow tip (path now stops at boundary)
             .attr('refY', 0)
             .attr('orient', 'auto')
             .attr('markerWidth', 6)
@@ -479,7 +563,7 @@ export class WebviewManager {
                     .style('stroke', '#00d9ff')
                     .style('stroke-width', '3px');
 
-                // Show tooltip
+                // Show tooltip at edge midpoint
                 const tooltip = document.getElementById('edgeTooltip');
                 tooltip.innerHTML = \`
                     <div><strong>Variable:</strong> \${d.label || 'N/A'}</div>
@@ -487,15 +571,31 @@ export class WebviewManager {
                     \${d.description ? \`<div><strong>Description:</strong> \${d.description}</div>\` : ''}
                     \${d.sourceLocation ? \`<div><strong>Location:</strong> \${d.sourceLocation.file.split('/').pop()}:\${d.sourceLocation.line}</div>\` : ''}
                 \`;
-                tooltip.style.display = 'block';
-                tooltip.style.left = (event.pageX + 10) + 'px';
-                tooltip.style.top = (event.pageY - 10) + 'px';
-            })
-            .on('mousemove', function(event, d) {
-                // Update tooltip position as mouse moves
-                const tooltip = document.getElementById('edgeTooltip');
-                tooltip.style.left = (event.pageX + 10) + 'px';
-                tooltip.style.top = (event.pageY - 10) + 'px';
+
+                // Get source and target nodes to calculate midpoint
+                const sourceNode = graphData.nodes.find(n => n.id === d.source);
+                const targetNode = graphData.nodes.find(n => n.id === d.target);
+
+                if (sourceNode && targetNode) {
+                    // Calculate midpoint in SVG coordinates
+                    const midX = (sourceNode.x + targetNode.x) / 2;
+                    const midY = (sourceNode.y + targetNode.y) / 2;
+
+                    // Get the SVG element and its bounding rect
+                    const svgElement = document.querySelector('#graph svg');
+                    const svgRect = svgElement.getBoundingClientRect();
+
+                    // Get current transform
+                    const transform = d3.zoomTransform(svgElement);
+
+                    // Convert SVG coordinates to screen coordinates
+                    const screenX = transform.applyX(midX) + svgRect.left;
+                    const screenY = transform.applyY(midY) + svgRect.top;
+
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (screenX + 10) + 'px';
+                    tooltip.style.top = (screenY - 10) + 'px';
+                }
             })
             .on('mouseout', function(event, d) {
                 // Reset edge highlight
@@ -577,13 +677,15 @@ export class WebviewManager {
         link.attr('d', d => {
             const sourceNode = graphData.nodes.find(n => n.id === d.source);
             const targetNode = graphData.nodes.find(n => n.id === d.target);
-            return \`M\${sourceNode.x},\${sourceNode.y} L\${targetNode.x},\${targetNode.y}\`;
+            const intersection = intersectRect(sourceNode, targetNode);
+            return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
         });
 
         linkHover.attr('d', d => {
             const sourceNode = graphData.nodes.find(n => n.id === d.source);
             const targetNode = graphData.nodes.find(n => n.id === d.target);
-            return \`M\${sourceNode.x},\${sourceNode.y} L\${targetNode.x},\${targetNode.y}\`;
+            const intersection = intersectRect(sourceNode, targetNode);
+            return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
         });
 
         linkLabel.attr('x', d => {
@@ -621,13 +723,15 @@ export class WebviewManager {
             link.attr('d', function(l) {
                 const sourceNode = graphData.nodes.find(n => n.id === l.source);
                 const targetNode = graphData.nodes.find(n => n.id === l.target);
-                return \`M\${sourceNode.x},\${sourceNode.y} L\${targetNode.x},\${targetNode.y}\`;
+                const intersection = intersectRect(sourceNode, targetNode);
+                return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
             });
 
             linkHover.attr('d', function(l) {
                 const sourceNode = graphData.nodes.find(n => n.id === l.source);
                 const targetNode = graphData.nodes.find(n => n.id === l.target);
-                return \`M\${sourceNode.x},\${sourceNode.y} L\${targetNode.x},\${targetNode.y}\`;
+                const intersection = intersectRect(sourceNode, targetNode);
+                return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
             });
 
             linkLabel.attr('x', function(l) {
@@ -814,6 +918,41 @@ export class WebviewManager {
         // Close panel when clicking outside
         svg.on('click', () => {
             closePanel();
+        });
+
+        // Listen for messages from the extension
+        window.addEventListener('message', event => {
+            const message = event.data;
+            const indicator = document.getElementById('loadingIndicator');
+            const iconSpan = indicator.querySelector('.loading-icon');
+            const textSpan = indicator.querySelector('.loading-text');
+
+            switch (message.command) {
+                case 'analysisStarted':
+                    indicator.className = 'loading-indicator';
+                    iconSpan.textContent = '⟳';
+                    textSpan.textContent = 'Analyzing workflow...';
+                    indicator.style.display = 'block';
+                    break;
+
+                case 'analysisComplete':
+                    if (message.success) {
+                        indicator.className = 'loading-indicator success';
+                        iconSpan.textContent = '✓';
+                        textSpan.textContent = 'Analysis complete';
+                        setTimeout(() => {
+                            indicator.style.display = 'none';
+                        }, 2000);
+                    } else {
+                        indicator.className = 'loading-indicator error';
+                        iconSpan.textContent = '✕';
+                        textSpan.textContent = message.error || 'Analysis failed';
+                        setTimeout(() => {
+                            indicator.style.display = 'none';
+                        }, 3000);
+                    }
+                    break;
+            }
         });
     </script>
 </body>

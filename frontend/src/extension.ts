@@ -68,6 +68,7 @@ export function activate(context: vscode.ExtensionContext) {
 
                 if (!graph) {
                     vscode.window.showInformationMessage('Analyzing workflow...');
+                    webview.notifyAnalysisStarted();
 
                     // Build metadata using static analysis
                     outputChannel.appendLine(`Building metadata with static analysis...`);
@@ -81,6 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
                     graph = await api.analyzeWorkflow(content, [filePath], framework || undefined, [metadata]);
                     await cache.set(filePath, content, graph);
                     outputChannel.appendLine(`Analysis complete, cached result`);
+                    webview.notifyAnalysisComplete(true);
                 } else {
                     outputChannel.appendLine(`Using cached result for ${filePath}`);
                 }
@@ -90,9 +92,9 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`ERROR: ${error.message}`);
                 outputChannel.appendLine(`Status: ${error.response?.status}`);
                 outputChannel.appendLine(`Response: ${JSON.stringify(error.response?.data)}`);
-                vscode.window.showErrorMessage(
-                    `Analysis failed: ${error.response?.data?.detail || error.message}`
-                );
+                const errorMsg = error.response?.data?.detail || error.message;
+                webview.notifyAnalysisComplete(false, errorMsg);
+                vscode.window.showErrorMessage(`Analysis failed: ${errorMsg}`);
             }
         })
     );
@@ -170,6 +172,7 @@ export function activate(context: vscode.ExtensionContext) {
                     outputChannel.appendLine(`Analyzing ${workflowFiles.length} files together...`);
 
                     vscode.window.showInformationMessage(`Analyzing ${workflowFiles.length} workflow files...`);
+                    webview.notifyAnalysisStarted();
 
                     graph = await api.analyzeWorkflow(combinedCode, allPaths, framework || undefined, metadata);
 
@@ -177,6 +180,7 @@ export function activate(context: vscode.ExtensionContext) {
                     await cache.setMultiple(allPaths, allContents, graph);
 
                     outputChannel.appendLine(`\nAnalysis complete: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+                    webview.notifyAnalysisComplete(true);
                 } else {
                     outputChannel.appendLine(`\nUsing cached result for workspace (${workflowFiles.length} files)`);
                 }
@@ -186,9 +190,9 @@ export function activate(context: vscode.ExtensionContext) {
                 outputChannel.appendLine(`ERROR: ${error.message}`);
                 outputChannel.appendLine(`Status: ${error.response?.status}`);
                 outputChannel.appendLine(`Response: ${JSON.stringify(error.response?.data)}`);
-                vscode.window.showErrorMessage(
-                    `Workspace scan failed: ${error.response?.data?.detail || error.message}`
-                );
+                const errorMsg = error.response?.data?.detail || error.message;
+                webview.notifyAnalysisComplete(false, errorMsg);
+                vscode.window.showErrorMessage(`Workspace scan failed: ${errorMsg}`);
             }
         })
     );
