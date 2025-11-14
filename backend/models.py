@@ -53,6 +53,9 @@ class GraphNode(BaseModel):
     type: str
     source: Optional[SourceLocation] = None
     metadata: Optional[Dict[str, Any]] = None
+    isEntryPoint: Optional[bool] = False  # Node with no incoming edges
+    isExitPoint: Optional[bool] = False   # Node with no outgoing edges
+    isCriticalPath: Optional[bool] = False  # Part of longest execution path
 
 class GraphEdge(BaseModel):
     source: str
@@ -62,6 +65,7 @@ class GraphEdge(BaseModel):
     dataType: Optional[str] = None  # Data type (e.g., "str", "dict", "AnalyzeRequest")
     description: Optional[str] = None  # What the variable represents
     sourceLocation: Optional[SourceLocation] = None  # Where variable is passed in code
+    isCriticalPath: Optional[bool] = False  # Part of longest execution path
 
 class WorkflowGraph(BaseModel):
     nodes: List[GraphNode]

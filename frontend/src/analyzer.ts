@@ -121,56 +121,100 @@ export class WorkflowDetector {
             '**/out/**',
             '**/dist/**',
             '**/build/**',
+            '**/.next/**',           // Next.js build output
+            '**/.nuxt/**',           // Nuxt build output
+            '**/.vitepress/**',      // VitePress build
+            '**/.docusaurus/**',     // Docusaurus build
+            '**/.svelte-kit/**',     // SvelteKit build
+            '**/.cache/**',          // General cache
+            '**/coverage/**',        // Test coverage
             '**/.vscode-test/**',
             '**/venv/**',
             '**/.venv/**',
-            '**/env/**'
+            '**/env/**',
+            '**/__pycache__/**',
+            '**/.ruff_cache/**'
         ];
         patterns.push(...commonExcludes);
 
-        // Read .gitignore
+        // Find all .gitignore files in the workspace
         try {
-            const gitignorePath = vscode.Uri.joinPath(workspaceUri, '.gitignore');
-            const content = await vscode.workspace.fs.readFile(gitignorePath);
-            const text = Buffer.from(content).toString('utf8');
+            const gitignoreFiles = await vscode.workspace.findFiles('**/.gitignore', null, 100);
 
-            const lines = text.split('\n');
-            for (const line of lines) {
-                const trimmed = line.trim();
-                // Skip empty lines and comments
-                if (!trimmed || trimmed.startsWith('#')) continue;
+            for (const gitignoreUri of gitignoreFiles) {
+                try {
+                    const content = await vscode.workspace.fs.readFile(gitignoreUri);
+                    const text = Buffer.from(content).toString('utf8');
 
-                // Convert gitignore pattern to glob pattern
-                let pattern = trimmed;
+                    // Get the directory containing this .gitignore
+                    const gitignoreDir = path.dirname(gitignoreUri.fsPath);
+                    const workspaceDir = workspaceUri.fsPath;
+                    const relativePath = path.relative(workspaceDir, gitignoreDir);
 
-                // Handle directory patterns (ending with /)
-                if (pattern.endsWith('/')) {
-                    pattern = `**/${pattern}**`;
-                }
-                // Handle specific file patterns
-                else if (pattern.startsWith('*.')) {
-                    pattern = `**/${pattern}`;
-                }
-                // Handle paths with subdirectories
-                else if (pattern.includes('/')) {
-                    // Convert to glob pattern
-                    if (!pattern.startsWith('**/')) {
-                        pattern = `**/${pattern}`;
+                    const lines = text.split('\n');
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        // Skip empty lines and comments
+                        if (!trimmed || trimmed.startsWith('#')) continue;
+
+                        // Skip malformed patterns with commas (these are not valid gitignore syntax)
+                        // Example: "*.py,cover" should be two lines: "*.py" and "cover"
+                        if (trimmed.includes(',') && !trimmed.startsWith('!')) {
+                            continue;
+                        }
+
+                        // Convert gitignore pattern to glob pattern
+                        let pattern = trimmed;
+
+                        // If .gitignore is in a subdirectory, prefix patterns appropriately
+                        const prefix = relativePath && relativePath !== '.' ? `${relativePath}/` : '';
+
+                        // Handle directory patterns (ending with /)
+                        if (pattern.endsWith('/')) {
+                            pattern = pattern.slice(0, -1);
+                            if (pattern.startsWith('/')) {
+                                // Absolute path from this .gitignore's directory
+                                pattern = `${prefix}${pattern.slice(1)}/**`;
+                            } else {
+                                // Relative pattern - match anywhere under this directory
+                                pattern = `${prefix}**/${pattern}/**`;
+                            }
+                        }
+                        // Handle specific file patterns
+                        else if (pattern.startsWith('*.')) {
+                            pattern = `${prefix}**/${pattern}`;
+                        }
+                        // Handle absolute paths from this .gitignore
+                        else if (pattern.startsWith('/')) {
+                            pattern = `${prefix}${pattern.slice(1)}`;
+                            if (!pattern.endsWith('/**')) {
+                                pattern = `${pattern}/**`;
+                            }
+                        }
+                        // Handle paths with subdirectories
+                        else if (pattern.includes('/')) {
+                            if (!pattern.startsWith('**/')) {
+                                pattern = `${prefix}**/${pattern}`;
+                            }
+                            if (!pattern.endsWith('/**')) {
+                                pattern = `${pattern}/**`;
+                            }
+                        }
+                        // Handle simple directory/file names
+                        else {
+                            // ONLY add ** prefix, don't add /** suffix for simple names
+                            // This prevents matching file extensions
+                            pattern = `${prefix}**/${pattern}`;
+                        }
+
+                        patterns.push(pattern);
                     }
-                    if (!pattern.endsWith('/**')) {
-                        pattern = `${pattern}/**`;
-                    }
+                } catch (err) {
+                    console.warn(`Could not read .gitignore at ${gitignoreUri.fsPath}:`, err);
                 }
-                // Handle simple directory/file names
-                else {
-                    pattern = `**/${pattern}/**`;
-                }
-
-                patterns.push(pattern);
             }
         } catch (error) {
-            // .gitignore doesn't exist or can't be read, just use common patterns
-            console.warn('Could not read .gitignore:', error);
+            console.warn('Could not find .gitignore files:', error);
         }
 
         return `{${patterns.join(',')}}`;
@@ -189,7 +233,7 @@ export class WorkflowDetector {
             const found = await vscode.workspace.findFiles(
                 `**/*${ext}`,
                 excludePattern,
-                100
+                10000  // Increased limit to handle large repositories
             );
             files.push(...found);
         }

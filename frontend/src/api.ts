@@ -14,12 +14,16 @@ export interface WorkflowNode {
     type: string;
     source?: SourceLocation;
     metadata?: any;
+    isEntryPoint?: boolean;
+    isExitPoint?: boolean;
+    isCriticalPath?: boolean;
 }
 
 export interface WorkflowEdge {
     source: string;
     target: string;
     label?: string;
+    isCriticalPath?: boolean;
 }
 
 export interface LocationMetadata {

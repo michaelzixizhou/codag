@@ -1,4 +1,5 @@
 import google.generativeai as genai
+import time
 from config import settings
 
 genai.configure(api_key=settings.gemini_api_key)
@@ -11,6 +12,7 @@ class GeminiClient:
                 'temperature': 0.0,  # Deterministic output
                 'top_p': 1.0,
                 'top_k': 1,
+                'max_output_tokens': 8192,  # Set explicit output limit
             }
         )
 
@@ -191,30 +193,82 @@ LABEL AND DESCRIPTION REQUIREMENTS (CRITICAL):
 - Use descriptions for detailed explanations - they appear in popups when nodes are clicked
 - Description examples: "Receives analysis requests via POST /analyze endpoint", "Calls Gemini 2.5 Flash to analyze code"
 
+CRITICAL PATH ANALYSIS (EXECUTION TIME):
+Identify the LONGEST execution path (time-wise) from entry to exit. This is the critical path.
+- Consider: LLM API calls (slowest), network requests, file I/O, database queries
+- Look for: Large prompts (more tokens = longer), waits, loops, external dependencies
+- Mark BOTH nodes and edges on this path with "isCriticalPath": true
+- Entry/Exit detection:
+  * Entry nodes have NO incoming edges (first operations)
+  * Exit nodes have NO outgoing edges (final operations)
+  * Mark with "isEntryPoint": true or "isExitPoint": true
+- Example slow operations: LLM calls (1-5 sec), API requests (100-500ms), large file reads
+- Example fast operations: variable assignments, simple parsing, function calls
+
 Code to analyze:
 {code}
+
+CRITICAL JSON STRUCTURE RULES:
+1. "source" field MUST be an object with {{"file": "...", "line": 123, "function": "..."}}
+2. "sourceLocation" field MUST be an object with {{"file": "...", "line": 123, "function": "..."}}
+3. NEVER use metadata references like "[1]", "[2]", etc. - ALWAYS use FULL objects
+4. WRONG: "source": "[3]"
+5. CORRECT: "source": {{"file": "/path/to/file.py", "line": 42, "function": "function_name"}}
+6. Copy the EXACT file/line/function values from metadata above (not the bracket numbers)
 
 Return ONLY valid JSON (NOTE: source locations MUST be different for each node):
 {{
   "nodes": [
-    {{"id": "node1", "label": "API Endpoint", "description": "Receives analysis requests via POST /analyze endpoint with code and metadata", "type": "trigger", "source": {{"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}}}},
-    {{"id": "node2", "label": "Format Request", "description": "Formats and validates incoming request data before processing", "type": "parser", "source": {{"file": "/backend/main.py", "line": 71, "function": "analyze_workflow"}}}},
-    {{"id": "node3", "label": "Gemini Call", "description": "Calls Gemini 2.5 Flash with temperature 0.0 to analyze code and extract workflow structure", "type": "llm", "source": {{"file": "/backend/gemini_client.py", "line": 137, "function": "analyze_workflow"}}}},
-    {{"id": "node4", "label": "Parse Response", "description": "Parses and validates LLM JSON response to extract nodes and edges", "type": "parser", "source": {{"file": "/backend/main.py", "line": 82, "function": "analyze_workflow"}}}},
-    {{"id": "node5", "label": "Return Response", "description": "Returns formatted workflow graph as JSON response to client", "type": "output", "source": {{"file": "/backend/main.py", "line": 86, "function": "analyze_workflow"}}}}
+    {{"id": "node1", "label": "API Endpoint", "description": "Receives analysis requests via POST /analyze endpoint with code and metadata", "type": "trigger", "source": {{"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}}, "isEntryPoint": true, "isCriticalPath": true}},
+    {{"id": "node2", "label": "Format Request", "description": "Formats and validates incoming request data before processing", "type": "parser", "source": {{"file": "/backend/main.py", "line": 71, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"id": "node3", "label": "Gemini Call", "description": "Calls Gemini 2.5 Flash with temperature 0.0 to analyze code and extract workflow structure", "type": "llm", "source": {{"file": "/backend/gemini_client.py", "line": 137, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"id": "node4", "label": "Parse Response", "description": "Parses and validates LLM JSON response to extract nodes and edges", "type": "parser", "source": {{"file": "/backend/main.py", "line": 82, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"id": "node5", "label": "Return Response", "description": "Returns formatted workflow graph as JSON response to client", "type": "output", "source": {{"file": "/backend/main.py", "line": 86, "function": "analyze_workflow"}}, "isExitPoint": true, "isCriticalPath": true}}
   ],
   "edges": [
-    {{"source": "node1", "target": "node2", "label": "request", "dataType": "AnalyzeRequest", "description": "Incoming analysis request with code and metadata", "sourceLocation": {{"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}}}},
-    {{"source": "node2", "target": "node3", "label": "prompt", "dataType": "str", "description": "Formatted prompt string for LLM analysis", "sourceLocation": {{"file": "/backend/main.py", "line": 74, "function": "analyze_workflow"}}}},
-    {{"source": "node3", "target": "node4", "label": "result", "dataType": "str", "description": "Raw JSON response text from Gemini", "sourceLocation": {{"file": "/backend/gemini_client.py", "line": 172, "function": "analyze_workflow"}}}},
-    {{"source": "node4", "target": "node5", "label": "graph_data", "dataType": "WorkflowGraph", "description": "Parsed and validated workflow graph object", "sourceLocation": {{"file": "/backend/main.py", "line": 85, "function": "analyze_workflow"}}}}
+    {{"source": "node1", "target": "node2", "label": "request", "dataType": "AnalyzeRequest", "description": "Incoming analysis request with code and metadata", "sourceLocation": {{"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}}, "isCriticalPath": true}},
+    {{"source": "node2", "target": "node3", "label": "prompt", "dataType": "str", "description": "Formatted prompt string for LLM analysis", "sourceLocation": {{"file": "/backend/main.py", "line": 74, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"source": "node3", "target": "node4", "label": "result", "dataType": "str", "description": "Raw JSON response text from Gemini", "sourceLocation": {{"file": "/backend/gemini_client.py", "line": 172, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"source": "node4", "target": "node5", "label": "graph_data", "dataType": "WorkflowGraph", "description": "Parsed and validated workflow graph object", "sourceLocation": {{"file": "/backend/main.py", "line": 85, "function": "analyze_workflow"}}, "isCriticalPath": true}}
   ],
   "llms_detected": ["OpenAI"]
 }}
 
+VALIDATION BEFORE RETURNING:
+- Check EVERY "source" field is an object (not a string like "[3]")
+- Check EVERY "sourceLocation" field is an object (not a string)
+- Check all required fields: file, line, function
+
 NO markdown, NO explanation, ONLY JSON."""
 
-        response = self.model.generate_content(prompt)
-        return response.text
+        # Retry with exponential backoff for rate limits
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a rate limit error (429) or quota exceeded
+                if '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower():
+                    if attempt < max_retries - 1:
+                        # Extract retry delay from error if available
+                        wait_time = 2 ** attempt  # Exponential: 1s, 2s, 4s
+                        if 'retry in' in error_str.lower():
+                            try:
+                                # Try to extract wait time from error message
+                                import re
+                                match = re.search(r'retry in ([\d.]+)', error_str, re.IGNORECASE)
+                                if match:
+                                    wait_time = float(match.group(1)) / 1000 + 1  # Convert ms to s, add buffer
+                            except:
+                                pass
+
+                        print(f"Rate limit hit, waiting {wait_time:.2f}s before retry {attempt + 1}/{max_retries}")
+                        time.sleep(wait_time)
+                    else:
+                        raise  # Last attempt, re-raise
+                else:
+                    raise  # Not a rate limit error, re-raise immediately
 
 gemini_client = GeminiClient()
