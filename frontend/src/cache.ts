@@ -4,6 +4,11 @@ import * as path from 'path';
 import { WorkflowGraph } from './api';
 import { StaticAnalyzer } from './static-analyzer';
 
+// Cache version - increment when format changes to auto-invalidate old entries
+// v1: absolute paths in cache keys
+// v2: relative paths in cache keys (for portability)
+const CACHE_VERSION = 2;
+
 interface PerFileCacheEntry {
     filePath: string;
     contentHash: string;
@@ -56,7 +61,16 @@ export class CacheManager {
         try {
             const cacheContent = await vscode.workspace.fs.readFile(this.cachePath);
             const parsed = JSON.parse(cacheContent.toString());
-            this.perFileCache = parsed.perFileCache || parsed || {};
+
+            // Check version compatibility
+            const cacheVersion = parsed.version || 1;
+            if (cacheVersion !== CACHE_VERSION) {
+                console.log(`Cache version mismatch (expected ${CACHE_VERSION}, got ${cacheVersion}), clearing cache`);
+                this.perFileCache = {};
+                return;
+            }
+
+            this.perFileCache = parsed.perFileCache || {};
         } catch (error) {
             // Cache file doesn't exist or is invalid, start with empty cache
             this.perFileCache = {};
@@ -71,6 +85,7 @@ export class CacheManager {
 
         try {
             const cacheContent = JSON.stringify({
+                version: CACHE_VERSION,
                 perFileCache: this.perFileCache
             }, null, 2);
             await vscode.workspace.fs.writeFile(this.cachePath, Buffer.from(cacheContent, 'utf8'));
@@ -141,9 +156,12 @@ export class CacheManager {
             .map((path, i) => ({ path, content: contents[i] }))
             .sort((a, b) => a.path.localeCompare(b.path));
 
-        // Create combined hash from sorted file hashes
+        // Create combined hash from sorted file hashes (using relative paths for portability)
         const fileHashes = sortedFiles
-            .map(f => `${f.path}:${this.hashContentAST(f.content, f.path)}`)
+            .map(f => {
+                const relativePath = vscode.workspace.asRelativePath(f.path);
+                return `${relativePath}:${this.hashContentAST(f.content, f.path)}`;
+            })
             .join('|');
 
         const workspaceHash = crypto.createHash('sha256').update(fileHashes).digest('hex');
@@ -165,9 +183,12 @@ export class CacheManager {
             .map((path, i) => ({ path, content: contents[i] }))
             .sort((a, b) => a.path.localeCompare(b.path));
 
-        // Create combined hash from sorted file hashes
+        // Create combined hash from sorted file hashes (using relative paths for portability)
         const fileHashes = sortedFiles
-            .map(f => `${f.path}:${this.hashContentAST(f.content, f.path)}`)
+            .map(f => {
+                const relativePath = vscode.workspace.asRelativePath(f.path);
+                return `${relativePath}:${this.hashContentAST(f.content, f.path)}`;
+            })
             .join('|');
 
         const workspaceHash = crypto.createHash('sha256').update(fileHashes).digest('hex');

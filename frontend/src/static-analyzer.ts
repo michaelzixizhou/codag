@@ -1,4 +1,5 @@
 import * as acorn from 'acorn';
+import * as jsx from 'acorn-jsx';
 const tsParser = require('@typescript-eslint/typescript-estree');
 
 export interface CodeLocation {
@@ -58,7 +59,8 @@ export class StaticAnalyzer {
 
     private analyzeJavaScript(code: string, filePath: string): FileAnalysis {
         try {
-            const ast = acorn.parse(code, {
+            const parser = acorn.Parser.extend(jsx.default());
+            const ast = parser.parse(code, {
                 ecmaVersion: 2020,
                 sourceType: 'module',
                 locations: true
@@ -238,7 +240,12 @@ export class StaticAnalyzer {
                 llmRelatedVariables
             };
         } catch (error) {
-            console.error(`Failed to analyze JavaScript for ${filePath}:`, error);
+            if (error instanceof Error && error.message.includes('Unexpected token')) {
+                console.warn(`⚠️  Skipping file with invalid JSX syntax: ${filePath}`);
+                console.warn(`    ${error.message}`);
+            } else {
+                console.error(`Failed to analyze JavaScript for ${filePath}:`, error);
+            }
             return {
                 filePath,
                 locations: [],

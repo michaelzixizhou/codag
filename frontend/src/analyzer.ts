@@ -203,9 +203,20 @@ export class WorkflowDetector {
      */
     private static async expandToImporters(
         baseFiles: vscode.Uri[],
-        allFiles: vscode.Uri[]
+        allFiles: vscode.Uri[],
+        processed: Set<string> = new Set(),
+        depth: number = 0
     ): Promise<vscode.Uri[]> {
+        // Prevent infinite recursion from circular imports
+        const MAX_DEPTH = 3;
+        if (depth >= MAX_DEPTH) {
+            console.log(`⚠️  Max recursion depth ${MAX_DEPTH} reached, stopping import expansion`);
+            return [];
+        }
+
         if (baseFiles.length === 0) return [];
+
+        console.log(`📂 Scanning ${allFiles.length} files for imports (depth ${depth})...`);
 
         const importers: vscode.Uri[] = [];
         const baseFilesSet = new Set(baseFiles.map(f => f.fsPath));
@@ -241,6 +252,10 @@ export class WorkflowDetector {
             // Skip files already in base set
             if (baseFilesSet.has(file.fsPath)) continue;
 
+            // Skip files already processed in previous iterations (prevent re-processing)
+            if (processed.has(file.fsPath)) continue;
+            processed.add(file.fsPath);
+
             try {
                 const content = await vscode.workspace.fs.readFile(file);
                 const text = Buffer.from(content).toString('utf8');
@@ -257,10 +272,12 @@ export class WorkflowDetector {
             }
         }
 
+        console.log(`✓ Found ${importers.length} files importing base LLM files`);
+
         // Optional: Expand one more level (find files that import the importers)
         // This catches chains like: endpoint.py → main.py → gemini_client.py
         if (importers.length > 0 && importers.length < 20) {  // Limit to prevent explosion
-            const secondLevelImporters = await this.expandToImporters(importers, allFiles);
+            const secondLevelImporters = await this.expandToImporters(importers, allFiles, processed, depth + 1);
             return [...importers, ...secondLevelImporters];
         }
 

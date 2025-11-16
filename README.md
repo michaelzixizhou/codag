@@ -167,3 +167,26 @@ python main.py  # Runs on http://localhost:8000
 2. Add API call pattern to `frontend/src/analyzer.ts` → `LLM_CALL_PATTERNS`
 3. Add detection logic to `backend/gemini_client.py` → "DETECT LLM PROVIDERS" section
 4. Run `cd frontend && npm run compile`
+
+## Future Enhancements
+
+### Consider Migrating to Dagre Compound Graphs
+
+The current layout system uses manual bounding box calculation and overlap resolution. A cleaner approach would be to use **Dagre's built-in compound graph support**:
+
+**Benefits:**
+- Native workflow grouping (no manual bounds calculation)
+- Automatic layout optimization for grouped nodes
+- Eliminates manual overlap resolution algorithm
+- More maintainable and predictable layout behavior
+
+**Implementation:**
+- Enable `compound: true` in Dagre graph config
+- Define workflow groups as parent nodes: `dagreGraph.setNode(workflowId, { isGroup: true })`
+- Set parent-child relationships: `dagreGraph.setParent(nodeId, workflowId)`
+- Let Dagre compute group bounds automatically
+
+**Trade-offs:**
+- Requires refactoring collapse/expand logic (currently visual-only CSS)
+- Could implement dynamic re-layout on collapse (remove nodes from graph) or keep current visual-only approach
+- Migration effort moderate but would future-proof the visualization system

@@ -61,6 +61,7 @@
   "dependencies": {
     "@typescript-eslint/typescript-estree": "^6.0.0",
     "acorn": "^8.11.0",
+    "acorn-jsx": "^5.3.2",
     "acorn-walk": "^8.3.0",
     "axios": "^1.6.0",
     "dagre": "^0.8.5"

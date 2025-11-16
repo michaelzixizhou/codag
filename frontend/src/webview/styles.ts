@@ -109,7 +109,7 @@ export const webviewStyles = `
         cursor: pointer;
         transition: stroke-width 0.2s ease, fill 0.2s ease, stroke 0.2s ease, rx 0.2s ease, ry 0.2s ease;
     }
-    .node:hover rect {
+    .node:hover rect:not(.node-header) {
         stroke-width: 4px;
         fill: var(--vscode-list-hoverBackground);
         stroke: #00d9ff;
@@ -142,6 +142,17 @@ export const webviewStyles = `
         pointer-events: none;
         user-select: none;
         text-anchor: middle;
+    }
+    .node-title {
+        font-size: 13px;
+        font-weight: 600;
+        fill: var(--vscode-editor-foreground);
+    }
+    .node-type {
+        font-size: 9px;
+        font-weight: 400;
+        fill: var(--vscode-descriptionForeground);
+        opacity: 0.8;
     }
     .link {
         fill: none;
@@ -229,7 +240,6 @@ export const webviewStyles = `
         pointer-events: none;
         white-space: nowrap;
         opacity: 0;
-        transition: opacity 0.2s ease;
     }
     .button-tooltip.visible {
         opacity: 1;
@@ -461,5 +471,15 @@ export const webviewStyles = `
         stroke-width: 2px;
         opacity: 0.8;
         pointer-events: none;
+    }
+    .collapsed-group-node {
+        cursor: pointer;
+    }
+    .collapsed-group-node:hover rect {
+        stroke-width: 4px !important;
+        filter: brightness(1.2) drop-shadow(0 4px 12px rgba(0,0,0,0.4)) !important;
+    }
+    .collapsed-group-node:hover text {
+        opacity: 1 !important;
     }
 `;

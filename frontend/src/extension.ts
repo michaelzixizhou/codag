@@ -270,6 +270,9 @@ export function activate(context: vscode.ExtensionContext) {
         log('Starting workspace scan...');
         log(`Workspace root: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath}`);
 
+        // Show webview immediately with loading state
+        webview.showLoading("Scanning workspace for AI workflows...");
+
         try {
             const workflowFiles = await WorkflowDetector.detectInWorkspace();
             log(`Found ${workflowFiles.length} workflow files:`);
@@ -285,12 +288,16 @@ export function activate(context: vscode.ExtensionContext) {
                 const relativePath = vscode.workspace.asRelativePath(uri);
                 log(`  - ${relativePath}`);
 
-                const content = await vscode.workspace.fs.readFile(uri);
-                const text = Buffer.from(content).toString('utf8');
-                fileContents.push({
-                    path: uri.fsPath,
-                    content: text
-                });
+                try {
+                    const content = await vscode.workspace.fs.readFile(uri);
+                    const text = Buffer.from(content).toString('utf8');
+                    fileContents.push({
+                        path: uri.fsPath,
+                        content: text
+                    });
+                } catch (error) {
+                    console.warn(`⚠️  Skipping file (read error): ${uri.fsPath}`, error);
+                }
             }
 
             const allPaths = fileContents.map(f => f.path);
@@ -300,12 +307,17 @@ export function activate(context: vscode.ExtensionContext) {
             let graph;
             if (!bypassCache) {
                 log(`\nChecking workspace cache for ${workflowFiles.length} files...`);
-                const cachedGraph = await cache.getWorkspace(allPaths, allContents);
-                if (cachedGraph) {
-                    log(`✓ Cache HIT: Using cached workspace graph (${cachedGraph.nodes.length} nodes, ${cachedGraph.edges.length} edges)`);
-                    graph = cachedGraph;
-                } else {
-                    log(`✗ Cache MISS: Analyzing all ${workflowFiles.length} files`);
+                try {
+                    const cachedGraph = await cache.getWorkspace(allPaths, allContents);
+                    if (cachedGraph) {
+                        log(`✓ Cache HIT: Using cached workspace graph (${cachedGraph.nodes.length} nodes, ${cachedGraph.edges.length} edges)`);
+                        graph = cachedGraph;
+                    } else {
+                        log(`✗ Cache MISS: Analyzing all ${workflowFiles.length} files`);
+                    }
+                } catch (cacheError: any) {
+                    log(`⚠️  Cache check failed: ${cacheError.message}, proceeding with analysis`);
+                    console.warn('Cache check error:', cacheError);
                 }
             } else {
                 log(`\nBypassing cache, analyzing all ${workflowFiles.length} files`);
@@ -393,6 +405,11 @@ export function activate(context: vscode.ExtensionContext) {
 
                             graphs.push(batchGraph);
                             log(`Batch ${batchIndex + 1} complete: ${batchGraph.nodes.length} nodes, ${batchGraph.edges.length} edges`);
+
+                            // Update progress and show partial results
+                            webview.updateProgress(batchIndex + 1, totalBatches);
+                            const mergedSoFar = cache.mergeGraphs(graphs);
+                            webview.updateGraph(mergedSoFar);
                         } catch (batchError: any) {
                             // If batch fails (safety filter, etc), try analyzing files individually
                             log(`Batch ${batchIndex + 1} failed: ${batchError.message}`);

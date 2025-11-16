@@ -25,6 +25,68 @@ export class WebviewManager {
         }
     }
 
+    showLoading(message: string) {
+        // Create panel if needed
+        if (!this.panel) {
+            this.panel = vscode.window.createWebviewPanel(
+                'aiworkflowviz',
+                'Workflow Visualization',
+                vscode.ViewColumn.Beside,
+                {
+                    enableScripts: true,
+                    retainContextWhenHidden: true
+                }
+            );
+
+            this.panel.onDidDispose(() => {
+                this.panel = undefined;
+            });
+
+            // Handle messages from webview
+            this.panel.webview.onDidReceiveMessage(
+                async (message) => {
+                    if (message.command === 'openFile') {
+                        try {
+                            const document = await vscode.workspace.openTextDocument(message.file);
+                            const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One);
+
+                            const line = message.line - 1;
+                            const range = new vscode.Range(line, 0, line, 0);
+                            editor.selection = new vscode.Selection(range.start, range.end);
+                            editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+                        } catch (error: any) {
+                            vscode.window.showErrorMessage(`Could not open file: ${error.message}`);
+                        }
+                    } else if (message.command === 'refreshAnalysis') {
+                        vscode.commands.executeCommand('aiworkflowviz.refresh');
+                    }
+                },
+                undefined,
+                this.context.subscriptions
+            );
+
+            // Set initial HTML with empty graph
+            this.panel.webview.html = this.getHtml({ nodes: [], edges: [], llms_detected: [], workflows: [] });
+        } else {
+            this.panel.reveal();
+        }
+
+        // Send loading message
+        this.panel.webview.postMessage({ command: 'showLoading', text: message });
+    }
+
+    updateProgress(current: number, total: number) {
+        if (this.panel) {
+            this.panel.webview.postMessage({ command: 'updateProgress', current, total });
+        }
+    }
+
+    updateGraph(graph: WorkflowGraph) {
+        if (this.panel) {
+            this.panel.webview.postMessage({ command: 'updateGraph', graph });
+        }
+    }
+
     show(graph: WorkflowGraph) {
         if (this.panel) {
             this.panel.reveal();
@@ -78,7 +140,7 @@ export class WebviewManager {
 
         // Create JavaScript functions for utilities
         const snapToGridFn = `const GRID_SIZE = 50; function snapToGrid(value) { return Math.round(value / GRID_SIZE) * GRID_SIZE; }`;
-        const intersectRectFn = `function intersectRect(sourceNode, targetNode, nodeWidth = 50, nodeHeight = 50) {
+        const intersectRectFn = `function intersectRect(sourceNode, targetNode, nodeWidth = 140, nodeHeight = 70) {
             const dx = sourceNode.x - targetNode.x;
             const dy = sourceNode.y - targetNode.y;
             const halfWidth = nodeWidth / 2;
@@ -201,13 +263,44 @@ export class WebviewManager {
 
     <script>
         const vscode = acquireVsCodeApi();
-        const graphData = ${JSON.stringify(graph)};
+        let currentGraphData = ${JSON.stringify(graph)};
 
         // Utility functions
         ${snapToGridFn}
         ${intersectRectFn}
         ${getIconFn}
         ${colorFromStringFn}
+
+        // Merge two graphs (for progressive updates)
+        function mergeGraphs(existing, newGraph) {
+            const merged = { ...existing };
+
+            // Merge nodes (deduplicate by id)
+            const nodeMap = new Map(existing.nodes.map(n => [n.id, n]));
+            newGraph.nodes.forEach(n => nodeMap.set(n.id, n));
+            merged.nodes = Array.from(nodeMap.values());
+
+            // Merge edges (deduplicate by source->target)
+            const edgeMap = new Map(existing.edges.map(e => [\`\${e.source}->\${e.target}\`, e]));
+            newGraph.edges.forEach(e => edgeMap.set(\`\${e.source}->\${e.target}\`, e));
+            merged.edges = Array.from(edgeMap.values());
+
+            // Merge LLMs detected
+            merged.llms_detected = [...new Set([...existing.llms_detected, ...newGraph.llms_detected])];
+
+            // Merge workflows
+            merged.workflows = [...existing.workflows];
+            newGraph.workflows.forEach(newWf => {
+                const existingWf = merged.workflows.find(w => w.id === newWf.id);
+                if (existingWf) {
+                    existingWf.nodeIds = [...new Set([...existingWf.nodeIds, ...newWf.nodeIds])];
+                } else {
+                    merged.workflows.push(newWf);
+                }
+            });
+
+            return merged;
+        }
 
         // Fallback: Detect entry/exit points and critical path if backend didn't set them
         function ensureVisualCues(data) {
@@ -272,7 +365,7 @@ export class WebviewManager {
             }
         }
 
-        ensureVisualCues(graphData);
+        ensureVisualCues(currentGraphData);
 
         // Detect workflow groups (collapsed by default for large graphs)
         function detectWorkflowGroups(data) {
@@ -483,7 +576,7 @@ export class WebviewManager {
             return groups;
         }
 
-        const workflowGroups = detectWorkflowGroups(graphData);
+        const workflowGroups = detectWorkflowGroups(currentGraphData);
 
         const container = document.getElementById('graph');
         const width = container.clientWidth;
@@ -552,20 +645,20 @@ export class WebviewManager {
         const dagreGraph = new dagre.graphlib.Graph();
         dagreGraph.setGraph({
             rankdir: 'LR',      // Left to right
-            nodesep: 75,        // Vertical spacing between nodes (balanced)
-            ranksep: 150,       // Horizontal spacing between ranks (balanced)
+            nodesep: 90,        // Vertical spacing: 90 - 70 (node height) = 20px gap
+            ranksep: 160,       // Horizontal spacing: 160 - 140 (node width) = 20px gap
             marginx: 30,        // Moderate margins for workflow separation
             marginy: 30
         });
         dagreGraph.setDefaultEdgeLabel(() => ({}));
 
         // Add nodes to Dagre
-        graphData.nodes.forEach(node => {
-            dagreGraph.setNode(node.id, { width: 50, height: 70 });
+        currentGraphData.nodes.forEach(node => {
+            dagreGraph.setNode(node.id, { width: 140, height: 70 });
         });
 
         // Add edges to Dagre
-        graphData.edges.forEach(edge => {
+        currentGraphData.edges.forEach(edge => {
             dagreGraph.setEdge(edge.source, edge.target);
         });
 
@@ -575,7 +668,7 @@ export class WebviewManager {
         // Apply Dagre positions to nodes (snap to grid)
         // Also store original positions for format reset
         const originalPositions = new Map();
-        graphData.nodes.forEach(node => {
+        currentGraphData.nodes.forEach(node => {
             const pos = dagreGraph.node(node.id);
             node.x = snapToGrid(pos.x);
             node.y = snapToGrid(pos.y);
@@ -586,17 +679,17 @@ export class WebviewManager {
 
         // Calculate group bounds after layout
         workflowGroups.forEach(group => {
-            const groupNodes = graphData.nodes.filter(n => group.nodes.includes(n.id));
+            const groupNodes = currentGraphData.nodes.filter(n => group.nodes.includes(n.id));
             if (groupNodes.length === 0) return;
 
             const xs = groupNodes.map(n => n.x);
             const ys = groupNodes.map(n => n.y);
 
             group.bounds = {
-                minX: Math.min(...xs) - 60,  // Balanced padding
-                maxX: Math.max(...xs) + 60,  // Balanced padding
-                minY: Math.min(...ys) - 80,  // Balanced padding
-                maxY: Math.max(...ys) + 80   // Balanced padding
+                minX: Math.min(...xs) - 90,  // Node half-width (70) + margin (20)
+                maxX: Math.max(...xs) + 90,  // Node half-width (70) + margin (20)
+                minY: Math.min(...ys) - 75,  // Node half-height (35) + margin (40 for title)
+                maxY: Math.max(...ys) + 55   // Node half-height (35) + margin (20)
             };
 
             // Calculate center for collapsed state
@@ -609,7 +702,7 @@ export class WebviewManager {
         const boundedGroups = workflowGroups.filter(g => g.id !== 'group_orphans');
 
         // Run multiple iterations to resolve all overlaps
-        const maxIterations = 10;
+        const maxIterations = 3;
         let iteration = 0;
         let hadOverlap = true;
 
@@ -643,7 +736,7 @@ export class WebviewManager {
                                 const shift = (g1.bounds.maxX - g2.bounds.minX) + padding;
 
                                 // Move nodes with the bounding box
-                                const g2Nodes = graphData.nodes.filter(n => g2.nodes.includes(n.id));
+                                const g2Nodes = currentGraphData.nodes.filter(n => g2.nodes.includes(n.id));
                                 g2Nodes.forEach(n => {
                                     n.x += shift;
                                     n.fx += shift;
@@ -653,10 +746,10 @@ export class WebviewManager {
                                 const xs = g2Nodes.map(n => n.x);
                                 const ys = g2Nodes.map(n => n.y);
                                 g2.bounds = {
-                                    minX: Math.min(...xs) - 60,
-                                    maxX: Math.max(...xs) + 60,
-                                    minY: Math.min(...ys) - 80,
-                                    maxY: Math.max(...ys) + 80
+                                    minX: Math.min(...xs) - 90,  // Node half-width (70) + margin (20)
+                                    maxX: Math.max(...xs) + 90,  // Node half-width (70) + margin (20)
+                                    minY: Math.min(...ys) - 75,  // Node half-height (35) + margin (40 for title)
+                                    maxY: Math.max(...ys) + 55   // Node half-height (35) + margin (20)
                                 };
                                 g2.centerX = (g2.bounds.minX + g2.bounds.maxX) / 2;
                                 g2.centerY = (g2.bounds.minY + g2.bounds.maxY) / 2;
@@ -664,7 +757,7 @@ export class WebviewManager {
                                 const shift = (g2.bounds.maxX - g1.bounds.minX) + padding;
 
                                 // Move nodes with the bounding box
-                                const g1Nodes = graphData.nodes.filter(n => g1.nodes.includes(n.id));
+                                const g1Nodes = currentGraphData.nodes.filter(n => g1.nodes.includes(n.id));
                                 g1Nodes.forEach(n => {
                                     n.x += shift;
                                     n.fx += shift;
@@ -674,10 +767,10 @@ export class WebviewManager {
                                 const xs = g1Nodes.map(n => n.x);
                                 const ys = g1Nodes.map(n => n.y);
                                 g1.bounds = {
-                                    minX: Math.min(...xs) - 60,
-                                    maxX: Math.max(...xs) + 60,
-                                    minY: Math.min(...ys) - 80,
-                                    maxY: Math.max(...ys) + 80
+                                    minX: Math.min(...xs) - 90,  // Node half-width (70) + margin (20)
+                                    maxX: Math.max(...xs) + 90,  // Node half-width (70) + margin (20)
+                                    minY: Math.min(...ys) - 75,  // Node half-height (35) + margin (40 for title)
+                                    maxY: Math.max(...ys) + 55   // Node half-height (35) + margin (20)
                                 };
                                 g1.centerX = (g1.bounds.minX + g1.bounds.maxX) / 2;
                                 g1.centerY = (g1.bounds.minY + g1.bounds.maxY) / 2;
@@ -688,7 +781,7 @@ export class WebviewManager {
                                 const shift = (g1.bounds.maxY - g2.bounds.minY) + padding;
 
                                 // Move nodes with the bounding box
-                                const g2Nodes = graphData.nodes.filter(n => g2.nodes.includes(n.id));
+                                const g2Nodes = currentGraphData.nodes.filter(n => g2.nodes.includes(n.id));
                                 g2Nodes.forEach(n => {
                                     n.y += shift;
                                     n.fy += shift;
@@ -698,10 +791,10 @@ export class WebviewManager {
                                 const xs = g2Nodes.map(n => n.x);
                                 const ys = g2Nodes.map(n => n.y);
                                 g2.bounds = {
-                                    minX: Math.min(...xs) - 60,
-                                    maxX: Math.max(...xs) + 60,
-                                    minY: Math.min(...ys) - 80,
-                                    maxY: Math.max(...ys) + 80
+                                    minX: Math.min(...xs) - 90,  // Node half-width (70) + margin (20)
+                                    maxX: Math.max(...xs) + 90,  // Node half-width (70) + margin (20)
+                                    minY: Math.min(...ys) - 75,  // Node half-height (35) + margin (40 for title)
+                                    maxY: Math.max(...ys) + 55   // Node half-height (35) + margin (20)
                                 };
                                 g2.centerX = (g2.bounds.minX + g2.bounds.maxX) / 2;
                                 g2.centerY = (g2.bounds.minY + g2.bounds.maxY) / 2;
@@ -709,7 +802,7 @@ export class WebviewManager {
                                 const shift = (g2.bounds.maxY - g1.bounds.minY) + padding;
 
                                 // Move nodes with the bounding box
-                                const g1Nodes = graphData.nodes.filter(n => g1.nodes.includes(n.id));
+                                const g1Nodes = currentGraphData.nodes.filter(n => g1.nodes.includes(n.id));
                                 g1Nodes.forEach(n => {
                                     n.y += shift;
                                     n.fy += shift;
@@ -719,10 +812,10 @@ export class WebviewManager {
                                 const xs = g1Nodes.map(n => n.x);
                                 const ys = g1Nodes.map(n => n.y);
                                 g1.bounds = {
-                                    minX: Math.min(...xs) - 60,
-                                    maxX: Math.max(...xs) + 60,
-                                    minY: Math.min(...ys) - 80,
-                                    maxY: Math.max(...ys) + 80
+                                    minX: Math.min(...xs) - 90,  // Node half-width (70) + margin (20)
+                                    maxX: Math.max(...xs) + 90,  // Node half-width (70) + margin (20)
+                                    minY: Math.min(...ys) - 75,  // Node half-height (35) + margin (40 for title)
+                                    maxY: Math.max(...ys) + 55   // Node half-height (35) + margin (20)
                                 };
                                 g1.centerX = (g1.bounds.minX + g1.bounds.maxX) / 2;
                                 g1.centerY = (g1.bounds.minY + g1.bounds.maxY) / 2;
@@ -732,6 +825,12 @@ export class WebviewManager {
                 }
             }
         }
+
+        // Update originalPositions to reflect post-overlap-resolution positions
+        // This ensures formatGraph() resets to the correct layout
+        currentGraphData.nodes.forEach(node => {
+            originalPositions.set(node.id, { x: node.x, y: node.y });
+        });
 
         // Create colored dot patterns for each workflow group
         workflowGroups.forEach((group, idx) => {
@@ -837,12 +936,12 @@ export class WebviewManager {
                     x: collapsedGroup.centerX,
                     y: collapsedGroup.centerY,
                     isCollapsedGroup: true,
-                    width: 200,
-                    height: 100
+                    width: 260,
+                    height: 130
                 };
             }
 
-            return graphData.nodes.find(n => n.id === nodeId);
+            return currentGraphData.nodes.find(n => n.id === nodeId);
         }
 
         // Update visibility of nodes/edges based on group collapse state
@@ -891,8 +990,8 @@ export class WebviewManager {
                 // Edge crosses group boundaries - show it
                 d3.select(this.parentNode).style('display', 'block');
 
-                const targetWidth = targetNode.isCollapsedGroup ? 200 : 50;
-                const targetHeight = targetNode.isCollapsedGroup ? 100 : 50;
+                const targetWidth = targetNode.isCollapsedGroup ? 260 : 140;
+                const targetHeight = targetNode.isCollapsedGroup ? 130 : 70;
 
                 const intersection = intersectRect(sourceNode, targetNode, targetWidth, targetHeight);
                 return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -911,8 +1010,8 @@ export class WebviewManager {
                     return '';
                 }
 
-                const targetWidth = targetNode.isCollapsedGroup ? 200 : 50;
-                const targetHeight = targetNode.isCollapsedGroup ? 100 : 50;
+                const targetWidth = targetNode.isCollapsedGroup ? 260 : 140;
+                const targetHeight = targetNode.isCollapsedGroup ? 130 : 70;
 
                 const intersection = intersectRect(sourceNode, targetNode, targetWidth, targetHeight);
                 return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -927,6 +1026,24 @@ export class WebviewManager {
                 const midX = (sourceNode.x + targetNode.x) / 2;
                 const midY = (sourceNode.y + targetNode.y) / 2;
                 return 'translate(' + midX + ',' + midY + ')';
+            })
+            .style('display', function(l) {
+                // Hide labels for edges where both endpoints are inside a collapsed group
+                const sourceNodeData = currentGraphData.nodes.find(n => n.id === l.source);
+                const targetNodeData = currentGraphData.nodes.find(n => n.id === l.target);
+
+                if (!sourceNodeData || !targetNodeData) return 'block';
+
+                // Check if both nodes belong to a collapsed group
+                const sourceGroup = workflowGroups.find(g => g.collapsed && g.nodes.includes(sourceNodeData.id));
+                const targetGroup = workflowGroups.find(g => g.collapsed && g.nodes.includes(targetNodeData.id));
+
+                // Hide if both nodes are in the same collapsed group
+                if (sourceGroup && targetGroup && sourceGroup.id === targetGroup.id) {
+                    return 'none';
+                }
+
+                return 'block';
             });
         }
 
@@ -938,7 +1055,7 @@ export class WebviewManager {
         // Create edge path groups (for paths only)
         const linkGroup = edgePathsContainer
             .selectAll('g')
-            .data(graphData.edges)
+            .data(currentGraphData.edges)
             .enter()
             .append('g')
             .attr('class', 'link-group');
@@ -950,7 +1067,7 @@ export class WebviewManager {
         // Create edge label groups (separate from paths, rendered on top)
         const linkLabelGroup = edgeLabelsContainer
             .selectAll('g')
-            .data(graphData.edges)
+            .data(currentGraphData.edges)
             .enter()
             .append('g')
             .attr('class', 'link-label-group');
@@ -967,15 +1084,17 @@ export class WebviewManager {
             .style('fill', 'none')
             .style('cursor', 'pointer')
             .on('mouseover', function(event, d) {
-                // Highlight the edge (different color for critical path)
-                // Select the .link element from the same parent group
-                const linkElement = d3.select(this.parentNode).select('.link');
+                // Unified hover: highlight both edge path and label
+                const index = currentGraphData.edges.indexOf(d);
+                const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
+                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
+
                 if (d.isCriticalPath) {
-                    linkElement.style('stroke', '#FF9999')
-                               .style('stroke-width', '5px');
+                    linkElement.style('stroke', '#FF9999').style('stroke-width', '5px');
+                    labelElement.style('font-weight', 'bold').style('fill', '#FF9999');
                 } else {
-                    linkElement.style('stroke', '#00d9ff')
-                               .style('stroke-width', '3px');
+                    linkElement.style('stroke', '#00d9ff').style('stroke-width', '3px');
+                    labelElement.style('font-weight', 'bold').style('fill', '#00d9ff');
                 }
 
                 // Show tooltip at edge midpoint
@@ -988,8 +1107,8 @@ export class WebviewManager {
                 \`;
 
                 // Get source and target nodes to calculate midpoint
-                const sourceNode = graphData.nodes.find(n => n.id === d.source);
-                const targetNode = graphData.nodes.find(n => n.id === d.target);
+                const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
+                const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
 
                 if (sourceNode && targetNode) {
                     // Calculate midpoint in SVG coordinates
@@ -1013,14 +1132,17 @@ export class WebviewManager {
                 }
             })
             .on('mouseout', function(event, d) {
-                // Reset the edge path from the same parent group
-                const linkElement = d3.select(this.parentNode).select('.link');
+                // Unified hover reset: reset both edge path and label
+                const index = currentGraphData.edges.indexOf(d);
+                const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
+                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
+
                 if (d.isCriticalPath) {
-                    linkElement.style('stroke', '#FF6B6B')
-                               .style('stroke-width', '4px');
+                    linkElement.style('stroke', '#FF6B6B').style('stroke-width', '4px');
+                    labelElement.style('font-weight', null).style('fill', null);
                 } else {
-                    linkElement.style('stroke', null)
-                               .style('stroke-width', null);
+                    linkElement.style('stroke', null).style('stroke-width', null);
+                    labelElement.style('font-weight', null).style('fill', null);
                 }
 
                 // Hide tooltip
@@ -1041,7 +1163,7 @@ export class WebviewManager {
         // Create nodes
         const node = g.append('g')
             .selectAll('g')
-            .data(graphData.nodes)
+            .data(currentGraphData.nodes)
             .enter()
             .append('g')
             .attr('class', 'node')
@@ -1050,12 +1172,40 @@ export class WebviewManager {
                 .on('drag', dragged)
                 .on('end', dragended));
 
-        // Add square background
+        // Add rectangular background fill (no stroke)
         node.append('rect')
-            .attr('width', 50)
-            .attr('height', 50)
-            .attr('x', -25)
-            .attr('y', -25)
+            .attr('width', 140)
+            .attr('height', 70)
+            .attr('x', -70)
+            .attr('y', -35)
+            .attr('rx', 4)
+            .style('fill', 'var(--vscode-editor-background)')
+            .style('stroke', 'none');
+
+        // Add colored header background (above fill, below border)
+        const typeColors = {
+            'trigger': '#FFB74D',
+            'llm': '#64B5F6',
+            'tool': '#81C784',
+            'decision': '#BA68C8',
+            'integration': '#FF8A65',
+            'memory': '#4DB6AC',
+            'parser': '#A1887F',
+            'output': '#90A4AE'
+        };
+        node.append('path')
+            .attr('class', 'node-header')
+            .attr('d', 'M -65,-35 L 65,-35 A 4,4 0 0,1 69,-31 L 69,-11 L -69,-11 L -69,-31 A 4,4 0 0,1 -65,-35 Z')
+            .style('fill', d => typeColors[d.type] || '#90A4AE')
+            .style('opacity', 0.3)
+            .style('stroke', 'none');
+
+        // Add rectangular border (stroke only, rendered on top)
+        node.append('rect')
+            .attr('width', 140)
+            .attr('height', 70)
+            .attr('x', -70)
+            .attr('y', -35)
             .attr('rx', 4)
             .attr('class', d => {
                 const classes = [];
@@ -1063,21 +1213,54 @@ export class WebviewManager {
                 if (d.isEntryPoint) classes.push('entry-point');
                 if (d.isExitPoint) classes.push('exit-point');
                 return classes.join(' ');
+            })
+            .style('fill', 'none')
+            .style('pointer-events', 'all');
+
+        // Add title inside node at top with dynamic sizing
+        node.append('text')
+            .attr('class', 'node-title')
+            .text(d => d.label)
+            .attr('y', -21)
+            .attr('dominant-baseline', 'middle')
+            .each(function() {
+                const maxWidth = 120; // Conservative width for safety
+                let textLength = this.getComputedTextLength();
+
+                if (textLength > maxWidth) {
+                    const scale = maxWidth / textLength;
+                    const currentFontSize = 13; // From CSS
+                    let newFontSize = Math.max(8, currentFontSize * scale); // Min 8px
+                    d3.select(this).style('font-size', newFontSize + 'px');
+
+                    // Re-measure to ensure it fits
+                    textLength = this.getComputedTextLength();
+                    if (textLength > maxWidth) {
+                        newFontSize = Math.max(7, newFontSize * (maxWidth / textLength));
+                        d3.select(this).style('font-size', newFontSize + 'px');
+                    }
+                }
             });
 
-        // Add icon based on node type
+        // Add icon at bottom-right corner (accounting for rounded corners)
         node.append('g')
             .attr('class', d => \`node-icon \${d.type}\`)
+            .attr('transform', 'translate(44, 10) scale(0.8)')
             .html(d => getIcon(d.type));
 
-        // Add label below node
+        // Add node type label to the left of icon (right-aligned with equal margins)
         node.append('text')
-            .text(d => d.label)
-            .attr('y', 40);
+            .attr('class', 'node-type')
+            .text(d => d.type.toUpperCase())
+            .attr('x', 40)
+            .attr('y', 21)
+            .attr('dominant-baseline', 'middle')
+            .style('text-anchor', 'end');
 
         // Add selection indicator (camera corners) - hidden by default
         const cornerSize = 8;
-        const cornerOffset = 28; // Distance from center to corner start
+        const cornerOffsetX = 72; // Distance from center to corner start (horizontal)
+        const cornerOffsetY = 37; // Distance from center to corner start (vertical)
         node.append('g')
             .attr('class', 'node-selection-indicator')
             .attr('data-node-id', d => d.id)
@@ -1085,13 +1268,13 @@ export class WebviewManager {
             .each(function() {
                 const g = d3.select(this);
                 // Top-left corner
-                g.append('path').attr('d', \`M -\${cornerOffset} -\${cornerOffset - cornerSize} L -\${cornerOffset} -\${cornerOffset} L -\${cornerOffset - cornerSize} -\${cornerOffset}\`);
+                g.append('path').attr('d', \`M -\${cornerOffsetX} -\${cornerOffsetY - cornerSize} L -\${cornerOffsetX} -\${cornerOffsetY} L -\${cornerOffsetX - cornerSize} -\${cornerOffsetY}\`);
                 // Top-right corner
-                g.append('path').attr('d', \`M \${cornerOffset - cornerSize} -\${cornerOffset} L \${cornerOffset} -\${cornerOffset} L \${cornerOffset} -\${cornerOffset - cornerSize}\`);
+                g.append('path').attr('d', \`M \${cornerOffsetX - cornerSize} -\${cornerOffsetY} L \${cornerOffsetX} -\${cornerOffsetY} L \${cornerOffsetX} -\${cornerOffsetY - cornerSize}\`);
                 // Bottom-left corner
-                g.append('path').attr('d', \`M -\${cornerOffset} \${cornerOffset - cornerSize} L -\${cornerOffset} \${cornerOffset} L -\${cornerOffset - cornerSize} \${cornerOffset}\`);
+                g.append('path').attr('d', \`M -\${cornerOffsetX} \${cornerOffsetY - cornerSize} L -\${cornerOffsetX} \${cornerOffsetY} L -\${cornerOffsetX - cornerSize} \${cornerOffsetY}\`);
                 // Bottom-right corner
-                g.append('path').attr('d', \`M \${cornerOffset - cornerSize} \${cornerOffset} L \${cornerOffset} \${cornerOffset} L \${cornerOffset} \${cornerOffset - cornerSize}\`);
+                g.append('path').attr('d', \`M \${cornerOffsetX - cornerSize} \${cornerOffsetY} L \${cornerOffsetX} \${cornerOffsetY} L \${cornerOffsetX} \${cornerOffsetY - cornerSize}\`);
             });
 
         // Tooltip on hover
@@ -1106,16 +1289,16 @@ export class WebviewManager {
 
         // Set initial positions (will be updated by updateGroupVisibility)
         link.attr('d', d => {
-            const sourceNode = graphData.nodes.find(n => n.id === d.source);
-            const targetNode = graphData.nodes.find(n => n.id === d.target);
+            const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
+            const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
             if (!sourceNode || !targetNode) return '';
             const intersection = intersectRect(sourceNode, targetNode);
             return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
         });
 
         linkHover.attr('d', d => {
-            const sourceNode = graphData.nodes.find(n => n.id === d.source);
-            const targetNode = graphData.nodes.find(n => n.id === d.target);
+            const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
+            const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
             if (!sourceNode || !targetNode) return '';
             const intersection = intersectRect(sourceNode, targetNode);
             return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -1123,8 +1306,8 @@ export class WebviewManager {
 
         // Position label groups
         linkLabelGroup.attr('transform', d => {
-            const sourceNode = graphData.nodes.find(n => n.id === d.source);
-            const targetNode = graphData.nodes.find(n => n.id === d.target);
+            const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
+            const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
             if (!sourceNode || !targetNode) return 'translate(0,0)';
             const midX = (sourceNode.x + targetNode.x) / 2;
             const midY = (sourceNode.y + targetNode.y) / 2;
@@ -1152,16 +1335,17 @@ export class WebviewManager {
         // Add event handlers to label groups
         linkLabelGroup
             .on('mouseover', function(event, d) {
-                // Find and highlight the corresponding edge path
-                // Since linkGroup and linkLabelGroup use the same data, find by index
-                const index = graphData.edges.indexOf(d);
+                // Unified hover: highlight both edge path and label
+                const index = currentGraphData.edges.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
+                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
+
                 if (d.isCriticalPath) {
-                    linkElement.style('stroke', '#FF9999')
-                               .style('stroke-width', '5px');
+                    linkElement.style('stroke', '#FF9999').style('stroke-width', '5px');
+                    labelElement.style('font-weight', 'bold').style('fill', '#FF9999');
                 } else {
-                    linkElement.style('stroke', '#00d9ff')
-                               .style('stroke-width', '3px');
+                    linkElement.style('stroke', '#00d9ff').style('stroke-width', '3px');
+                    labelElement.style('font-weight', 'bold').style('fill', '#00d9ff');
                 }
 
                 // Show tooltip
@@ -1174,8 +1358,8 @@ export class WebviewManager {
                 // Get screen position
                 const transform = d3.zoomTransform(document.querySelector('#graph svg'));
                 const svgRect = document.querySelector('#graph svg').getBoundingClientRect();
-                const sourceNode = graphData.nodes.find(n => n.id === d.source);
-                const targetNode = graphData.nodes.find(n => n.id === d.target);
+                const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
+                const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
                 const midX = (sourceNode.x + targetNode.x) / 2;
                 const midY = (sourceNode.y + targetNode.y) / 2;
                 const screenX = transform.applyX(midX) + svgRect.left;
@@ -1186,15 +1370,17 @@ export class WebviewManager {
                 tooltip.style.top = (screenY - 10) + 'px';
             })
             .on('mouseout', function(event, d) {
-                // Find and reset the corresponding edge path
-                const index = graphData.edges.indexOf(d);
+                // Unified hover reset: reset both edge path and label
+                const index = currentGraphData.edges.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
+                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
+
                 if (d.isCriticalPath) {
-                    linkElement.style('stroke', '#FF6B6B')
-                               .style('stroke-width', '4px');
+                    linkElement.style('stroke', '#FF6B6B').style('stroke-width', '4px');
+                    labelElement.style('font-weight', null).style('fill', null);
                 } else {
-                    linkElement.style('stroke', null)
-                               .style('stroke-width', null);
+                    linkElement.style('stroke', null).style('stroke-width', null);
+                    labelElement.style('font-weight', null).style('fill', null);
                 }
 
                 // Hide tooltip
@@ -1233,10 +1419,10 @@ export class WebviewManager {
 
         // Background with pegboard pattern
         collapsedGroups.append('rect')
-            .attr('x', d => d.centerX - 100)
-            .attr('y', d => d.centerY - 50)
-            .attr('width', 200)
-            .attr('height', 100)
+            .attr('x', d => d.centerX - 130)
+            .attr('y', d => d.centerY - 65)
+            .attr('width', 260)
+            .attr('height', 130)
             .attr('rx', 12)
             .style('fill', d => 'url(#pegboard-' + d.id + ')')
             .style('stroke', d => d.color)
@@ -1245,10 +1431,10 @@ export class WebviewManager {
 
         // Solid color overlay
         collapsedGroups.append('rect')
-            .attr('x', d => d.centerX - 100)
-            .attr('y', d => d.centerY - 50)
-            .attr('width', 200)
-            .attr('height', 100)
+            .attr('x', d => d.centerX - 130)
+            .attr('y', d => d.centerY - 65)
+            .attr('width', 260)
+            .attr('height', 130)
             .attr('rx', 12)
             .style('fill', d => d.color)
             .style('fill-opacity', 0.7)
@@ -1261,7 +1447,23 @@ export class WebviewManager {
             .style('fill', '#ffffff')
             .style('font-size', '15px')
             .style('font-weight', '700')
-            .text(d => d.name);
+            .text(d => d.name)
+            .each(function() {
+                const maxWidth = 240;
+                let textLength = this.getComputedTextLength();
+                if (textLength > maxWidth) {
+                    const scale = maxWidth / textLength;
+                    const currentFontSize = 15;
+                    let newFontSize = Math.max(10, currentFontSize * scale);
+                    d3.select(this).style('font-size', newFontSize + 'px');
+                    // Re-measure to ensure it fits
+                    textLength = this.getComputedTextLength();
+                    if (textLength > maxWidth) {
+                        newFontSize = Math.max(9, newFontSize * (maxWidth / textLength));
+                        d3.select(this).style('font-size', newFontSize + 'px');
+                    }
+                }
+            });
 
         collapsedGroups.append('text')
             .attr('x', d => d.centerX)
@@ -1270,7 +1472,23 @@ export class WebviewManager {
             .style('fill', '#ffffff')
             .style('opacity', 0.9)
             .style('font-size', '12px')
-            .text(d => d.nodes.length + ' nodes • ' + d.llmProvider);
+            .text(d => d.nodes.length + ' nodes • ' + d.llmProvider)
+            .each(function() {
+                const maxWidth = 240;
+                let textLength = this.getComputedTextLength();
+                if (textLength > maxWidth) {
+                    const scale = maxWidth / textLength;
+                    const currentFontSize = 12;
+                    let newFontSize = Math.max(9, currentFontSize * scale);
+                    d3.select(this).style('font-size', newFontSize + 'px');
+                    // Re-measure to ensure it fits
+                    textLength = this.getComputedTextLength();
+                    if (textLength > maxWidth) {
+                        newFontSize = Math.max(8, newFontSize * (maxWidth / textLength));
+                        d3.select(this).style('font-size', newFontSize + 'px');
+                    }
+                }
+            });
 
         collapsedGroups.append('text')
             .attr('x', d => d.centerX)
@@ -1278,7 +1496,7 @@ export class WebviewManager {
             .attr('text-anchor', 'middle')
             .style('fill', '#ffffff')
             .style('opacity', 0.7)
-            .style('font-size', '10px')
+            .style('font-size', '12px')
             .text('Click to expand ▼');
 
         // Drag functions (update fixed positions)
@@ -1307,8 +1525,8 @@ export class WebviewManager {
                 const targetNode = getNodeOrCollapsedGroup(l.target);
                 if (!sourceNode || !targetNode) return '';
 
-                const targetWidth = targetNode.isCollapsedGroup ? 200 : 50;
-                const targetHeight = targetNode.isCollapsedGroup ? 100 : 50;
+                const targetWidth = targetNode.isCollapsedGroup ? 260 : 140;
+                const targetHeight = targetNode.isCollapsedGroup ? 130 : 70;
 
                 const intersection = intersectRect(sourceNode, targetNode, targetWidth, targetHeight);
                 return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -1319,8 +1537,8 @@ export class WebviewManager {
                 const targetNode = getNodeOrCollapsedGroup(l.target);
                 if (!sourceNode || !targetNode) return '';
 
-                const targetWidth = targetNode.isCollapsedGroup ? 200 : 50;
-                const targetHeight = targetNode.isCollapsedGroup ? 100 : 50;
+                const targetWidth = targetNode.isCollapsedGroup ? 260 : 140;
+                const targetHeight = targetNode.isCollapsedGroup ? 130 : 70;
 
                 const intersection = intersectRect(sourceNode, targetNode, targetWidth, targetHeight);
                 return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -1337,8 +1555,8 @@ export class WebviewManager {
             })
             .style('display', function(l) {
                 // Hide labels for edges where both endpoints are inside a collapsed group
-                const sourceNodeData = graphData.nodes.find(n => n.id === l.source);
-                const targetNodeData = graphData.nodes.find(n => n.id === l.target);
+                const sourceNodeData = currentGraphData.nodes.find(n => n.id === l.source);
+                const targetNodeData = currentGraphData.nodes.find(n => n.id === l.target);
 
                 if (!sourceNodeData || !targetNodeData) return 'block';
 
@@ -1393,13 +1611,13 @@ export class WebviewManager {
             // Update connected edges
             minimapSvg.selectAll('.minimap-edge').each(function() {
                 const edge = d3.select(this);
-                const edgeData = graphData.edges.find(e =>
+                const edgeData = currentGraphData.edges.find(e =>
                     edge.attr('data-source') === e.source && edge.attr('data-target') === e.target
                 );
 
                 if (edgeData && (edgeData.source === node.id || edgeData.target === node.id)) {
-                    const sourceNode = graphData.nodes.find(n => n.id === edgeData.source);
-                    const targetNode = graphData.nodes.find(n => n.id === edgeData.target);
+                    const sourceNode = currentGraphData.nodes.find(n => n.id === edgeData.source);
+                    const targetNode = currentGraphData.nodes.find(n => n.id === edgeData.target);
 
                     edge.attr('x1', toMinimapX(sourceNode.x))
                         .attr('y1', toMinimapY(sourceNode.y))
@@ -1458,7 +1676,7 @@ export class WebviewManager {
         // Format graph (reset to original layout)
         function formatGraph() {
             // Reset all nodes to their original dagre-computed positions
-            graphData.nodes.forEach(node => {
+            currentGraphData.nodes.forEach(node => {
                 const orig = originalPositions.get(node.id);
                 if (orig) {
                     node.x = orig.x;
@@ -1467,6 +1685,48 @@ export class WebviewManager {
                     node.fy = orig.y;
                 }
             });
+
+            // Recalculate group bounds based on new node positions
+            workflowGroups.forEach(group => {
+                const groupNodes = currentGraphData.nodes.filter(n => group.nodes.includes(n.id));
+                if (groupNodes.length === 0) return;
+
+                const xs = groupNodes.map(n => n.x);
+                const ys = groupNodes.map(n => n.y);
+
+                group.bounds = {
+                    minX: Math.min(...xs) - 90,  // Node half-width (70) + margin (20)
+                    maxX: Math.max(...xs) + 90,  // Node half-width (70) + margin (20)
+                    minY: Math.min(...ys) - 75,  // Node half-height (35) + margin (40 for title)
+                    maxY: Math.max(...ys) + 55   // Node half-height (35) + margin (20)
+                };
+
+                // Update center for collapsed state
+                group.centerX = (group.bounds.minX + group.bounds.maxX) / 2;
+                group.centerY = (group.bounds.minY + group.bounds.maxY) / 2;
+            });
+
+            // Update bounding box positions with smooth transition
+            svg.selectAll('.group-background')
+                .transition()
+                .duration(500)
+                .attr('x', d => d.bounds.minX)
+                .attr('y', d => d.bounds.minY)
+                .attr('width', d => d.bounds.maxX - d.bounds.minX)
+                .attr('height', d => d.bounds.maxY - d.bounds.minY);
+
+            // Update bounding box title positions
+            svg.selectAll('.group-title-expanded')
+                .transition()
+                .duration(500)
+                .attr('x', d => d.bounds.minX + 40)
+                .attr('y', d => d.bounds.minY + 20);
+
+            // Update collapse button positions
+            svg.selectAll('.group-collapse-btn')
+                .transition()
+                .duration(500)
+                .attr('transform', d => \`translate(\${d.bounds.minX + 10}, \${d.bounds.minY + 10})\`);
 
             // Update node positions with smooth transition
             svg.selectAll('.node')
@@ -1481,8 +1741,8 @@ export class WebviewManager {
                     const targetNode = getNodeOrCollapsedGroup(l.target);
                     if (!sourceNode || !targetNode) return '';
 
-                    const targetWidth = targetNode.isCollapsedGroup ? 200 : 50;
-                    const targetHeight = targetNode.isCollapsedGroup ? 100 : 50;
+                    const targetWidth = targetNode.isCollapsedGroup ? 260 : 140;
+                    const targetHeight = targetNode.isCollapsedGroup ? 130 : 70;
 
                     const intersection = intersectRect(sourceNode, targetNode, targetWidth, targetHeight);
                     return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -1494,8 +1754,8 @@ export class WebviewManager {
                     const targetNode = getNodeOrCollapsedGroup(l.target);
                     if (!sourceNode || !targetNode) return '';
 
-                    const targetWidth = targetNode.isCollapsedGroup ? 200 : 50;
-                    const targetHeight = targetNode.isCollapsedGroup ? 100 : 50;
+                    const targetWidth = targetNode.isCollapsedGroup ? 260 : 140;
+                    const targetHeight = targetNode.isCollapsedGroup ? 130 : 70;
 
                     const intersection = intersectRect(sourceNode, targetNode, targetWidth, targetHeight);
                     return \`M\${sourceNode.x},\${sourceNode.y} L\${intersection.x},\${intersection.y}\`;
@@ -1618,15 +1878,16 @@ export class WebviewManager {
             const height = container.clientHeight;
 
             // Calculate bounds from actual node positions (ignore pegboard)
-            if (graphData.nodes.length === 0) return;
+            if (currentGraphData.nodes.length === 0) return;
 
-            const nodeSize = 50; // Node width/height
-            const xs = graphData.nodes.map(n => n.x);
-            const ys = graphData.nodes.map(n => n.y);
-            const minX = Math.min(...xs) - nodeSize / 2;
-            const maxX = Math.max(...xs) + nodeSize / 2;
-            const minY = Math.min(...ys) - nodeSize / 2;
-            const maxY = Math.max(...ys) + nodeSize / 2;
+            const nodeWidth = 140;
+            const nodeHeight = 70;
+            const xs = currentGraphData.nodes.map(n => n.x);
+            const ys = currentGraphData.nodes.map(n => n.y);
+            const minX = Math.min(...xs) - nodeWidth / 2;
+            const maxX = Math.max(...xs) + nodeWidth / 2;
+            const minY = Math.min(...ys) - nodeHeight; // Extra top margin for title
+            const maxY = Math.max(...ys) + nodeHeight / 2;
 
             const fullWidth = maxX - minX;
             const fullHeight = maxY - minY;
@@ -1665,20 +1926,26 @@ export class WebviewManager {
             const minimapG = minimapSvg.append('g');
 
             // Calculate bounds from node positions
-            if (graphData.nodes.length === 0) return;
+            if (currentGraphData.nodes.length === 0) return;
 
-            const nodeSize = 50;
-            const xs = graphData.nodes.map(n => n.x);
-            const ys = graphData.nodes.map(n => n.y);
-            const minX = Math.min(...xs) - nodeSize / 2;
-            const maxX = Math.max(...xs) + nodeSize / 2;
-            const minY = Math.min(...ys) - nodeSize / 2;
-            const maxY = Math.max(...ys) + nodeSize / 2;
+            const nodeWidth = 140;
+            const nodeHeight = 70;
+            const xs = currentGraphData.nodes.map(n => n.x);
+            const ys = currentGraphData.nodes.map(n => n.y);
+            const minX = Math.min(...xs) - nodeWidth / 2;
+            const maxX = Math.max(...xs) + nodeWidth / 2;
+            const minY = Math.min(...ys) - nodeHeight; // Extra top margin for title
+            const maxY = Math.max(...ys) + nodeHeight / 2;
 
             const graphWidth = maxX - minX;
             const graphHeight = maxY - minY;
             const graphCenterX = (minX + maxX) / 2;
             const graphCenterY = (minY + maxY) / 2;
+
+            // Safety check: ensure valid dimensions
+            if (graphWidth <= 0 || graphHeight <= 0 || !isFinite(graphWidth) || !isFinite(graphHeight)) {
+                return;
+            }
 
             // Calculate scale to fit graph in minimap with padding
             const padding = 10;
@@ -1686,6 +1953,11 @@ export class WebviewManager {
                 (minimapWidth - padding * 2) / graphWidth,
                 (minimapHeight - padding * 2) / graphHeight
             );
+
+            // Safety check: ensure valid scale
+            if (!isFinite(scale) || scale <= 0) {
+                return;
+            }
 
             // Calculate scaled dimensions
             const scaledWidth = graphWidth * scale;
@@ -1718,9 +1990,9 @@ export class WebviewManager {
             });
 
             // Render edges
-            graphData.edges.forEach(edge => {
-                const sourceNode = graphData.nodes.find(n => n.id === edge.source);
-                const targetNode = graphData.nodes.find(n => n.id === edge.target);
+            currentGraphData.edges.forEach(edge => {
+                const sourceNode = currentGraphData.nodes.find(n => n.id === edge.source);
+                const targetNode = currentGraphData.nodes.find(n => n.id === edge.target);
 
                 if (sourceNode && targetNode) {
                     minimapG.append('line')
@@ -1735,7 +2007,7 @@ export class WebviewManager {
             });
 
             // Render nodes with type-based coloring
-            graphData.nodes.forEach(node => {
+            currentGraphData.nodes.forEach(node => {
                 minimapG.append('circle')
                     .attr('class', 'minimap-node ' + node.type)
                     .attr('cx', toMinimapX(node.x))
@@ -1792,6 +2064,16 @@ export class WebviewManager {
             const offsetY = minimapSvg.minimapOffsetY;
             const minX = minimapSvg.minimapMinX;
             const minY = minimapSvg.minimapMinY;
+
+            // Safety check: ensure all values are valid
+            if (!isFinite(scale) || !isFinite(offsetX) || !isFinite(offsetY) || !isFinite(minX) || !isFinite(minY)) {
+                return;
+            }
+
+            // Get current container dimensions
+            const container = document.getElementById('graph');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
 
             // Calculate visible area in graph coordinates
             const viewportX = -currentTransform.x / currentTransform.k;
@@ -1877,10 +2159,10 @@ export class WebviewManager {
             }
 
             // Find incoming edges
-            const incomingEdges = graphData.edges.filter(e => e.target === nodeData.id);
+            const incomingEdges = currentGraphData.edges.filter(e => e.target === nodeData.id);
             if (incomingEdges.length > 0) {
                 incoming.innerHTML = incomingEdges.map(edge => {
-                    const sourceNode = graphData.nodes.find(n => n.id === edge.source);
+                    const sourceNode = currentGraphData.nodes.find(n => n.id === edge.source);
                     const fileName = edge.sourceLocation?.file?.split('/').pop() || '';
                     const location = edge.sourceLocation ? \`\${fileName}:\${edge.sourceLocation.line}\` : '';
                     return \`
@@ -1902,10 +2184,10 @@ export class WebviewManager {
             }
 
             // Find outgoing edges
-            const outgoingEdges = graphData.edges.filter(e => e.source === nodeData.id);
+            const outgoingEdges = currentGraphData.edges.filter(e => e.source === nodeData.id);
             if (outgoingEdges.length > 0) {
                 outgoing.innerHTML = outgoingEdges.map(edge => {
-                    const targetNode = graphData.nodes.find(n => n.id === edge.target);
+                    const targetNode = currentGraphData.nodes.find(n => n.id === edge.target);
                     const fileName = edge.sourceLocation?.file?.split('/').pop() || '';
                     const location = edge.sourceLocation ? \`\${fileName}:\${edge.sourceLocation.line}\` : '';
                     return \`
@@ -1961,6 +2243,26 @@ export class WebviewManager {
             const textSpan = indicator.querySelector('.loading-text');
 
             switch (message.command) {
+                case 'showLoading':
+                    indicator.className = 'loading-indicator';
+                    iconSpan.textContent = '⟳';
+                    textSpan.textContent = message.text || 'Loading...';
+                    indicator.style.display = 'block';
+                    break;
+
+                case 'updateProgress':
+                    indicator.className = 'loading-indicator';
+                    iconSpan.textContent = '⟳';
+                    textSpan.textContent = \`Batch \${message.current}/\${message.total} complete...\`;
+                    indicator.style.display = 'block';
+                    break;
+
+                case 'updateGraph':
+                    // Merge new graph data and reload page to re-render
+                    currentGraphData = mergeGraphs(currentGraphData, message.graph);
+                    location.reload();
+                    break;
+
                 case 'analysisStarted':
                     indicator.className = 'loading-indicator';
                     iconSpan.textContent = '⟳';
