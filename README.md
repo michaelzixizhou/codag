@@ -1,6 +1,16 @@
 # AI Workflow Visualizer
 
-VSCode extension that visualizes AI/LLM workflows using Gemini 2.5 Flash. Analyzes code containing LLM API calls and frameworks to generate interactive workflow graphs.
+VSCode extension that visualizes AI/LLM workflows using Gemini 2.5 Flash. Analyzes code containing LLM API calls and frameworks to generate interactive workflow graphs with critical path analysis.
+
+## Features
+
+- **Workspace-wide Analysis**: Scans entire workspace for AI workflow files
+- **Interactive Graphs**: D3.js-powered visualization with pan, zoom, and click-to-navigate
+- **Critical Path Highlighting**: Identifies longest execution path from entry to exit
+- **Smart Caching**: AST-aware content hashing for efficient reanalysis
+- **Workflow Grouping**: Automatically organizes nodes into logical workflows
+- **Code Navigation**: Click nodes to view source and jump to code location
+- **HUD Controls**: Expand/collapse workflows, format graph, refresh analysis
 
 ## Supported Technologies
 
@@ -48,27 +58,51 @@ Press F5 in VSCode to open extension development host.
 
 In the extension development window:
 
-1. **Auto-detect Workspace**: `CMD+Shift+P` → "AI Workflow: Auto-detect and Visualize"
+1. **Analyze Workspace**: `CMD+Shift+P` → "AI Workflow Visualizer: Analyze Workspace"
    - Scans workspace for LLM-related files
    - Analyzes all files together as unified workflow
+   - Shows analysis time in output panel
 
-2. **Visualize Current File**: `CMD+Shift+P` → "AI Workflow: Visualize Current File"
+2. **Visualize Current File**: `CMD+Shift+P` → "AI Workflow Visualizer: Visualize Current File"
    - Analyze single file
 
-**Click nodes** to view source location and jump to code.
+3. **Clear Cache**: `CMD+Shift+P` → "AI Workflow Visualizer: Clear Cache"
+   - Forces reanalysis on next visualization
+
+### Graph Controls
+
+- **Pan/Zoom**: Click and drag to pan, scroll to zoom
+- **Expand/Collapse All**: Purple button - toggle all workflows
+- **Format Graph**: Blue button - reset layout and zoom
+- **Refresh**: Red button - reanalyze and update graph
+- **Minimap**: Bottom-left overview with viewport indicator
+- **Legend**: Shows entry/exit points and critical path
+
+### Interactions
+
+- **Click nodes**: Opens side panel with source location and description
+- **Click source link**: Jumps to code in editor
+- **Hover edge labels**: Highlights entire edge path
+- **Hover HUD icons**: Shows icon descriptions
 
 ## Workflow Components
 
 The system identifies 8 node types:
 
-- **Triggers**: Entry points (API endpoints, main functions)
-- **LLM Calls**: LLM API invocations
-- **Tools**: Functions callable by LLMs
-- **Decisions**: Conditional logic on LLM output
-- **Integrations**: External APIs, databases
-- **Memory**: State/conversation storage
-- **Parsers**: Data transformation, formatting
-- **Output**: Return statements, responses
+- **Triggers** (orange): Entry points (API endpoints, main functions)
+- **LLM Calls** (blue): LLM API invocations
+- **Tools** (green): Functions callable by LLMs
+- **Decisions** (purple): Conditional logic on LLM output
+- **Integrations** (red-orange): External APIs, databases
+- **Memory** (teal): State/conversation storage
+- **Parsers** (brown): Data transformation, formatting
+- **Output** (gray): Return statements, responses
+
+### Special Indicators
+
+- **Green outline**: Entry point nodes (workflow starts)
+- **Blue outline**: Exit point nodes (workflow ends)
+- **Red edge**: Critical path (longest execution time from entry to exit)
 
 ## Architecture
 
@@ -77,11 +111,19 @@ The system identifies 8 node types:
 - **Frontend** (TypeScript/VSCode): D3.js + Dagre visualization in webview panel
 
 **Data Flow:**
-1. Frontend detects LLM files via regex patterns
-2. Sends code to backend `/analyze` endpoint
-3. Backend uses Gemini to extract workflow nodes/edges
-4. Frontend caches results by file hash
-5. Webview displays interactive graph
+1. Frontend detects LLM files via regex patterns (`analyzer.ts`)
+2. Sends code to backend `/analyze` endpoint with file metadata
+3. Backend uses Gemini to extract workflow nodes/edges (`gemini_client.py`)
+4. Frontend caches results using workspace-level content hash (`cache.ts`)
+5. Webview displays interactive graph with separate containers for edges/labels
+
+**Key Design Decisions:**
+- **AST-aware caching**: Only hashes LLM-relevant code (ignores comments/whitespace)
+- **Workspace-level caching**: Preserves cross-file edges in batch analysis
+- **Deterministic file ordering**: Sorts files by path before hashing for consistent cache hits
+- **Separated SVG layers**: Edge paths render beneath all edge labels
+- **Critical path validation**: Enforces singular linear path from entry to exit
+- **Workflow connectivity**: All nodes in workflow must be reachable via edges
 
 **Note**: Auth is currently disabled (TODOs exist in code for re-enabling).
 
@@ -104,15 +146,20 @@ python main.py  # Runs on http://localhost:8000
 ## Key Files
 
 **Backend:**
-- `gemini_client.py` - LLM prompt for workflow extraction
-- `models.py` - Pydantic models (`WorkflowGraph`, `SourceLocation`)
-- `analyzer.py` - Static analysis patterns
+- `gemini_client.py` - LLM prompt for workflow extraction with validation rules
+- `models.py` - Pydantic models (`WorkflowGraph`, `SourceLocation`, `WorkflowNode`)
+- `analyzer.py` - Static analysis patterns for LLM detection
+- `main.py` - FastAPI server with `/analyze` endpoint
 
 **Frontend:**
-- `extension.ts` - VSCode commands, file navigation
-- `webview.ts` - D3.js/Dagre visualization
-- `analyzer.ts` - Client-side LLM detection
-- `cache.ts` - Multi-file workspace caching
+- `extension.ts` - VSCode commands, analysis orchestration, caching logic
+- `webview.ts` - D3.js/Dagre visualization with tooltips, side panel, minimap
+- `webview/styles.ts` - All CSS styling including node types and hover effects
+- `webview/icons.ts` - SVG icons for each node type
+- `analyzer.ts` - Client-side LLM detection patterns
+- `cache.ts` - Workspace-level caching with AST-aware hashing
+- `static-analyzer.ts` - TypeScript/Python AST parsing for content hashing
+- `metadata-builder.ts` - File dependency analysis and batching
 
 ## Adding LLM Providers
 
