@@ -216,7 +216,15 @@ export function activate(context: vscode.ExtensionContext) {
             log(`ERROR: ${error.message}`);
             log(`Status: ${error.response?.status}`);
             log(`Response: ${JSON.stringify(error.response?.data)}`);
+
+            // Filter out VSCode internal errors (e.g., missing prompts directory)
             const errorMsg = error.response?.data?.detail || error.message;
+            if (errorMsg.includes('Application Support/Code/User/prompts') ||
+                (error.code === 'ENOENT' && errorMsg.includes('/User/'))) {
+                log(`Ignoring VSCode internal error: ${errorMsg}`);
+                return;
+            }
+
             webview.notifyAnalysisComplete(false, errorMsg);
             vscode.window.showErrorMessage(`Analysis failed: ${errorMsg}`);
         }
@@ -473,7 +481,15 @@ export function activate(context: vscode.ExtensionContext) {
             log(`ERROR: ${error.message}`);
             log(`Status: ${error.response?.status}`);
             log(`Response: ${JSON.stringify(error.response?.data)}`);
+
+            // Filter out VSCode internal errors (e.g., missing prompts directory)
             const errorMsg = error.response?.data?.detail || error.message;
+            if (errorMsg.includes('Application Support/Code/User/prompts') ||
+                (error.code === 'ENOENT' && errorMsg.includes('/User/'))) {
+                log(`Ignoring VSCode internal error: ${errorMsg}`);
+                return;
+            }
+
             webview.notifyAnalysisComplete(false, errorMsg);
             vscode.window.showErrorMessage(`Workspace scan failed: ${errorMsg}`);
         }

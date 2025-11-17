@@ -200,17 +200,6 @@ export const webviewStyles = `
         cursor: pointer;
         transition: fill 0.2s, fill-opacity 0.2s;
     }
-    .link-label-group:hover .link-label {
-        transform: scale(1.1);
-        transition: transform 0.2s ease;
-        fill: #000000;
-    }
-    .link-label-group:hover .link-label-bg {
-        transform: scale(1.1);
-        transition: transform 0.2s ease;
-        fill: #00d9ff;
-        fill-opacity: 1;
-    }
     .edge-tooltip {
         position: fixed;
         background: var(--vscode-editor-background);
