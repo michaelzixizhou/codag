@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { WorkflowGraph } from './api';
 import { ViewState } from './copilot/types';
 import { webviewStyles } from './webview/styles';
+import { getHtmlTemplate } from './webview/template';
+import { loadScripts } from './webview/script-loader';
 import { getNodeIcon } from './webview/icons';
 import { snapToGrid, intersectRect, colorFromString } from './webview/utils';
 
@@ -225,485 +227,8 @@ export class WebviewManager {
             graphJson = '{}';
         }
 
-        return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workflow Visualization</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-    <style>${webviewStyles}
-    </style>
-</head>
-<body>
-    <div id="header">
-        <h1>AI Workflow Visualization</h1>
-        <div id="controls">
-            <button onclick="zoomIn()" title="Zoom In">
-                <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-            </button>
-            <button onclick="zoomOut()" title="Zoom Out">
-                <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
-            </button>
-            <button onclick="resetZoom()" title="Fit to Screen">
-                <svg viewBox="0 0 24 24"><path d="M3 3h6v2H5v4H3V3zm18 0v6h-2V5h-4V3h6zM3 15v6h6v-2H5v-4H3zm16 0v4h-4v2h6v-6h-2z"/></svg>
-            </button>
-            <button class="expand-btn" onclick="toggleExpandAll()" title="Expand/Collapse All Workflows">
-                <svg viewBox="0 0 24 24"><path d="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/></svg>
-            </button>
-            <button class="format-btn" onclick="formatGraph()" title="Reset Layout">
-                <svg viewBox="0 0 24 24"><path d="M3 3v8h8V3H3zm6 6H5V5h4v4zm-6 4v8h8v-8H3zm6 6H5v-4h4v4zm4-16v8h8V3h-8zm6 6h-4V5h4v4zm-6 4v8h8v-8h-8zm6 6h-4v-4h4v4z"/></svg>
-            </button>
-            <button class="refresh-btn" onclick="refreshAnalysis()" title="Reanalyze Entire Workspace">
-                <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-            </button>
-        </div>
-    </div>
-
-    <div id="graph"></div>
-
-    <div id="buttonTooltip" class="button-tooltip"></div>
-
-    <div id="legend" class="legend">
-        <div class="legend-header" onclick="toggleLegend()">
-            <span>Legend</span>
-            <span id="legendToggle" class="legend-toggle">−</span>
-        </div>
-        <div id="legendContent" class="legend-content">
-            <div class="legend-item">
-                <div class="legend-line legend-line-entry"></div>
-                <span>Entry Point</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-line legend-line-exit"></div>
-                <span>Exit Point</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-line legend-line-critical"></div>
-                <span>Critical Path</span>
-            </div>
-        </div>
-    </div>
-
-    <div id="minimap"></div>
-
-    <div id="edgeTooltip" class="edge-tooltip" style="display: none;"></div>
-
-    <div id="loadingIndicator" class="loading-indicator" style="display: none;">
-        <div class="loading-content">
-            <div>
-                <div class="loading-icon">⏳</div>
-                <div class="loading-text">Analyzing workflow...</div>
-            </div>
-            <div class="progress-bar-container" style="display: none;">
-                <div class="progress-bar-fill"></div>
-            </div>
-        </div>
-    </div>
-
-    <div id="progressOverlay" class="progress-overlay" style="display: none;">
-        <div class="overlay-content">
-            <div class="overlay-spinner">⟳</div>
-            <div class="overlay-text">Processing...</div>
-        </div>
-    </div>
-
-    <div id="sidePanel" class="side-panel">
-        <div class="panel-header">
-            <h2 id="panelTitle">Node Details</h2>
-            <button class="close-btn" onclick="closePanel()">&times;</button>
-        </div>
-        <div class="panel-content">
-            <div class="panel-section">
-                <label>Type</label>
-                <div id="panelType" class="type-badge">-</div>
-            </div>
-            <div id="descriptionSection" class="panel-section">
-                <label>Description</label>
-                <p id="panelDescription">-</p>
-            </div>
-            <div id="sourceSection" class="panel-section">
-                <label>Source Location</label>
-                <a id="panelSource" class="source-link" href="#">-</a>
-            </div>
-            <div id="incomingSection" class="panel-section">
-                <label>Incoming Data</label>
-                <div id="panelIncoming">-</div>
-            </div>
-            <div id="outgoingSection" class="panel-section">
-                <label>Outgoing Data</label>
-                <div id="panelOutgoing">-</div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const vscode = acquireVsCodeApi();
-        let currentGraphData = ${graphJson};
-
-        // Utility functions
-        const GRID_SIZE = 5;
-        function snapToGrid(value) {
-            return Math.round(value / GRID_SIZE) * GRID_SIZE;
-        }
-
-        function intersectRect(sourceNode, targetNode, nodeWidth = 140, nodeHeight = 70) {
-            const dx = sourceNode.x - targetNode.x;
-            const dy = sourceNode.y - targetNode.y;
-            const halfWidth = nodeWidth / 2;
-            const halfHeight = nodeHeight / 2;
-            if (Math.abs(dy/dx) > halfHeight/halfWidth) {
-                return { x: targetNode.x + dx * Math.abs(halfHeight/dy), y: targetNode.y + halfHeight * Math.sign(dy) };
-            } else {
-                return { x: targetNode.x + halfWidth * Math.sign(dx), y: targetNode.y + dy * Math.abs(halfWidth/dx) };
-            }
-        }
-
-        function getIcon(type) {
-            const icons = {
-                trigger: '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M13 3v7h9l-9 11v-7H4l9-11z" fill="currentColor"/></svg>',
-                llm: '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 2C8.5 2 5.5 3.5 4 6c-.5.8-.7 1.7-.7 2.6 0 1.8 1 3.4 2.5 4.4-.2.6-.3 1.3-.3 2 0 3.9 3.1 7 7 7s7-3.1 7-7c0-.7-.1-1.4-.3-2 1.5-1 2.5-2.6 2.5-4.4 0-.9-.2-1.8-.7-2.6C19.5 3.5 16.5 2 13 2h-1zm0 4c.6 0 1 .4 1 1v2h2c.6 0 1 .4 1 1s-.4 1-1 1h-2v2c0 .6-.4 1-1 1s-1-.4-1-1v-2H9c-.6 0-1-.4-1-1s.4-1 1-1h2V7c0-.6.4-1 1-1z" fill="currentColor"/></svg>',
-                tool: '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" fill="currentColor"/></svg>',
-                decision: '<svg viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="4" r="2" fill="currentColor"/><circle cx="6" cy="20" r="2" fill="currentColor"/><circle cx="18" cy="20" r="2" fill="currentColor"/><path d="M12 6v5m0 0l-5 7m5-7l5 7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-                integration: '<svg viewBox="0 0 24 24" width="24" height="24"><rect x="3" y="4" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="4" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="13" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 7.5h4M10 16.5h4M6.5 11v2M17.5 11v2" stroke="currentColor" stroke-width="2"/></svg>',
-                memory: '<svg viewBox="0 0 24 24" width="24" height="24"><ellipse cx="12" cy="6" rx="7" ry="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 6v12c0 1.66 3.13 3 7 3s7-1.34 7-3V6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 12c0 1.66 3.13 3 7 3s7-1.34 7-3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
-                parser: '<svg viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4m-2.93-7.07l-2.83 2.83m-8.48 8.48l-2.83 2.83m14.14 0l-2.83-2.83m-8.48-8.48L4.93 4.93" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-                output: '<svg viewBox="0 0 24 24" width="24" height="24"><path d="M5 12l5 5L20 7" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/></svg>'
-            };
-            return icons[type] || icons.output;
-        }
-
-        function colorFromString(str, saturation = 70, lightness = 60) {
-            let hash = 0;
-            for (let i = 0; i < str.length; i++) {
-                hash = str.charCodeAt(i) + ((hash << 5) - hash);
-            }
-            const hue = Math.abs(hash) % 360;
-            return 'hsl(' + hue + ', ' + saturation + '%, ' + lightness + '%)';
-        }
-
-        // Fallback: Detect entry/exit points and critical path if backend didn't set them
-        function ensureVisualCues(data) {
-            // Build adjacency lists
-            const incomingEdges = new Map();
-            const outgoingEdges = new Map();
-
-            data.nodes.forEach(n => {
-                incomingEdges.set(n.id, []);
-                outgoingEdges.set(n.id, []);
-            });
-
-            data.edges.forEach(e => {
-                incomingEdges.get(e.target).push(e);
-                outgoingEdges.get(e.source).push(e);
-            });
-
-            // Detect entry/exit points
-            data.nodes.forEach(node => {
-                if (!node.isEntryPoint && incomingEdges.get(node.id).length === 0) {
-                    node.isEntryPoint = true;
-                }
-                if (!node.isExitPoint && outgoingEdges.get(node.id).length === 0) {
-                    node.isExitPoint = true;
-                }
-            });
-
-            // Detect critical path: find LLM nodes and mark path through them
-            const llmNodes = data.nodes.filter(n => n.type === 'llm');
-            if (llmNodes.length > 0 && !llmNodes.some(n => n.isCriticalPath)) {
-                // Simple heuristic: mark first LLM node and its connected path
-                const llmNode = llmNodes[0];
-                llmNode.isCriticalPath = true;
-
-                // Trace backwards to entry
-                let current = llmNode;
-                while (true) {
-                    const incoming = incomingEdges.get(current.id);
-                    if (incoming.length === 0) break;
-
-                    incoming[0].isCriticalPath = true;
-                    const sourceNode = data.nodes.find(n => n.id === incoming[0].source);
-                    if (sourceNode) {
-                        sourceNode.isCriticalPath = true;
-                        current = sourceNode;
-                    } else break;
-                }
-
-                // Trace forwards to exit
-                current = llmNode;
-                while (true) {
-                    const outgoing = outgoingEdges.get(current.id);
-                    if (outgoing.length === 0) break;
-
-                    outgoing[0].isCriticalPath = true;
-                    const targetNode = data.nodes.find(n => n.id === outgoing[0].target);
-                    if (targetNode) {
-                        targetNode.isCriticalPath = true;
-                        current = targetNode;
-                    } else break;
-                }
-            }
-        }
-
-        ensureVisualCues(currentGraphData);
-
-        // Detect workflow groups (collapsed by default for large graphs)
-        function detectWorkflowGroups(data) {
-            if (data.nodes.length < 5) {
-                // Don't group very small graphs (< 5 nodes)
-                return [];
-            }
-
-            // Prefer backend-provided workflow metadata if available
-            if (data.workflows && data.workflows.length > 0) {
-                const groups = [];
-
-                // Build adjacency lists for connectivity validation
-                const incomingEdges = new Map();
-                const outgoingEdges = new Map();
-                data.nodes.forEach(n => {
-                    incomingEdges.set(n.id, []);
-                    outgoingEdges.set(n.id, []);
-                });
-                data.edges.forEach(e => {
-                    incomingEdges.get(e.target).push(e);
-                    outgoingEdges.get(e.source).push(e);
-                });
-
-                // Group workflows by ID first to handle duplicates from multi-file analysis
-                const workflowsByBase = new Map();
-                data.workflows.forEach((workflow, idx) => {
-                    const workflowNodes = data.nodes.filter(n => workflow.nodeIds.includes(n.id));
-                    const llmNodesInWorkflow = workflowNodes.filter(n => n.type === 'llm');
-
-                    // ONLY include workflows that have LLM nodes
-                    if (llmNodesInWorkflow.length === 0) {
-                        return;  // Skip non-LLM workflows
-                    }
-
-                    // Extract base workflow ID (remove file-specific suffixes if any)
-                    const baseId = workflow.id || 'group_' + idx;
-
-                    if (!workflowsByBase.has(baseId)) {
-                        workflowsByBase.set(baseId, {
-                            id: baseId,
-                            name: workflow.name,
-                            description: workflow.description,
-                            nodeIds: []
-                        });
-                    }
-
-                    // Merge node IDs from all instances of this workflow
-                    const merged = workflowsByBase.get(baseId);
-                    workflow.nodeIds.forEach(nodeId => {
-                        if (!merged.nodeIds.includes(nodeId)) {
-                            merged.nodeIds.push(nodeId);
-                        }
-                    });
-                });
-
-                // Now process each merged workflow and split into connected components
-                workflowsByBase.forEach((workflow, baseId) => {
-                    // VALIDATE: Split disconnected components within this workflow
-                    const visited = new Set();
-                    const connectedComponents = [];
-
-                    // Constrain BFS to only nodes within this workflow
-                    const workflowNodeSet = new Set(workflow.nodeIds);
-
-                    workflow.nodeIds.forEach(startNodeId => {
-                        if (visited.has(startNodeId)) return;
-
-                        // BFS to find all connected nodes within this workflow
-                        const component = new Set();
-                        const queue = [startNodeId];
-                        const queueVisited = new Set([startNodeId]);
-
-                        while (queue.length > 0) {
-                            const currentId = queue.shift();
-                            component.add(currentId);
-                            visited.add(currentId);
-
-                            // Traverse edges only to nodes within this workflow's boundaries
-                            const incoming = incomingEdges.get(currentId) || [];
-                            for (const edge of incoming) {
-                                if (!queueVisited.has(edge.source) && workflowNodeSet.has(edge.source)) {
-                                    queue.push(edge.source);
-                                    queueVisited.add(edge.source);
-                                }
-                            }
-
-                            const outgoing = outgoingEdges.get(currentId) || [];
-                            for (const edge of outgoing) {
-                                if (!queueVisited.has(edge.target) && workflowNodeSet.has(edge.target)) {
-                                    queue.push(edge.target);
-                                    queueVisited.add(edge.target);
-                                }
-                            }
-                        }
-
-                        connectedComponents.push(Array.from(component));
-                    });
-
-                    // Create a separate group for each connected component
-                    const llmProvider = data.llms_detected && data.llms_detected.length > 0
-                        ? data.llms_detected[0]
-                        : 'LLM';
-
-                    // Log warning if splitting occurs (indicates backend issue)
-                    if (connectedComponents.length > 1) {
-                        console.warn(
-                            'Workflow "' + workflow.name + '" contains ' + connectedComponents.length + ' disconnected components. ' +
-                            'This indicates the backend LLM assigned unconnected nodes to the same workflow. ' +
-                            'Consider creating separate workflows for each component.'
-                        );
-                    }
-
-                    connectedComponents.forEach((componentNodes, compIdx) => {
-                        const groupId = connectedComponents.length > 1
-                            ? baseId + '_' + compIdx
-                            : baseId;
-
-                        // Try to create meaningful names for disconnected components
-                        let groupName = workflow.name;
-
-                        if (connectedComponents.length > 1) {
-                            // Extract nodes for this component
-                            const componentNodesData = componentNodes.map(id =>
-                                data.nodes.find(n => n.id === id)
-                            ).filter(n => n);
-
-                            // Try to infer a distinct name from node labels
-                            const entryNodes = componentNodesData.filter(n => n.isEntryPoint);
-                            const llmNodes = componentNodesData.filter(n => n.type === 'llm');
-
-                            if (entryNodes.length > 0) {
-                                // Use entry point label as distinguisher
-                                groupName = workflow.name + ' - ' + entryNodes[0].label;
-                            } else if (llmNodes.length > 0) {
-                                // Use LLM label as distinguisher
-                                groupName = workflow.name + ' - ' + llmNodes[0].label;
-                            } else {
-                                // Fallback to Part numbering
-                                groupName = workflow.name + ' (Part ' + (compIdx + 1) + ')';
-                            }
-                        }
-
-                        groups.push({
-                            id: groupId,
-                            name: groupName,
-                            description: workflow.description,
-                            nodes: componentNodes,
-                            llmProvider: llmProvider,
-                            collapsed: false,
-                            color: colorFromString(groupId),
-                            level: 1
-                        });
-                    });
-                });
-                return groups;
-            }
-
-            // Fallback: Use client-side BFS grouping if backend doesn't provide workflows
-            const groups = [];
-            const visited = new Set();
-            const incomingEdges = new Map();
-            const outgoingEdges = new Map();
-
-            // Build adjacency lists
-            data.nodes.forEach(n => {
-                incomingEdges.set(n.id, []);
-                outgoingEdges.set(n.id, []);
-            });
-
-            data.edges.forEach(e => {
-                incomingEdges.get(e.target).push(e);
-                outgoingEdges.get(e.source).push(e);
-            });
-
-            // Find all connected components and create workflow groups
-            // Start with LLM-containing components, then handle remaining nodes
-            const llmNodes = data.nodes.filter(n => n.type === 'llm');
-            const allVisitedNodes = new Set();
-
-            // First pass: Create workflows for LLM-containing components
-            llmNodes.forEach((llmNode, idx) => {
-                if (visited.has(llmNode.id)) return;
-
-                const groupNodes = new Set();
-                const llmNodesInGroup = new Set();
-
-                // Use BFS to traverse ENTIRE connected component
-                const queue = [llmNode.id];
-                const groupVisited = new Set([llmNode.id]);
-
-                while (queue.length > 0) {
-                    const currentId = queue.shift();
-                    groupNodes.add(currentId);
-                    allVisitedNodes.add(currentId);
-
-                    // Track LLM nodes in this component
-                    const currentNode = data.nodes.find(n => n.id === currentId);
-                    if (currentNode && currentNode.type === 'llm') {
-                        llmNodesInGroup.add(currentNode);
-                        visited.add(currentNode.id);  // Mark this LLM as processed
-                    }
-
-                    // Traverse backwards through ALL incoming edges
-                    const incoming = incomingEdges.get(currentId) || [];
-                    for (const edge of incoming) {
-                        const prevNodeId = edge.source;
-                        if (!groupVisited.has(prevNodeId)) {
-                            queue.push(prevNodeId);
-                            groupVisited.add(prevNodeId);
-                        }
-                    }
-
-                    // Traverse forwards through ALL outgoing edges
-                    const outgoing = outgoingEdges.get(currentId) || [];
-                    for (const edge of outgoing) {
-                        const nextNodeId = edge.target;
-                        if (!groupVisited.has(nextNodeId)) {
-                            queue.push(nextNodeId);
-                            groupVisited.add(nextNodeId);
-                        }
-                    }
-                }
-
-                // Create group only if it has 2+ nodes
-                const groupNodesList = Array.from(groupNodes);
-
-                if (groupNodesList.length >= 3) {
-                    const llmProvider = data.llms_detected && data.llms_detected.length > 0
-                        ? data.llms_detected[0]
-                        : 'LLM';
-
-                    // Use first LLM node's label, or show count if multiple LLMs
-                    const groupName = llmNodesInGroup.size > 1
-                        ? 'Workflow (' + llmNodesInGroup.size + ' LLM calls)'
-                        : (llmNode.label || 'Workflow ' + (idx + 1));
-
-                    const groupId = 'group_' + idx;
-                    groups.push({
-                        id: groupId,
-                        name: groupName,
-                        nodes: groupNodesList,
-                        llmProvider: llmProvider,
-                        collapsed: false,  // Start expanded
-                        color: colorFromString(groupId),  // Unique color
-                        level: 1  // Level 1 group
-                    });
-                }
-            });
-
-            // Don't render orphan nodes - only nodes in LLM workflows should be displayed
-
-            return groups;
-        }
-
-        const workflowGroups = detectWorkflowGroups(currentGraphData);
-
+        // Build the main renderer script (everything after workflow detection)
+        const mainRendererScript = `
         // Helper function to count how many workflows contain a node
         function getNodeWorkflowCount(nodeId) {
             return workflowGroups.filter(g => g.nodes.includes(nodeId)).length;
@@ -2423,8 +1948,12 @@ export class WebviewManager {
                 sourceSection.style.display = 'none';
             }
 
-            // Find incoming edges
-            const incomingEdges = currentGraphData.edges.filter(e => e.target === nodeData.id);
+            // Find incoming edges (only show edges where source node exists - filter orphaned nodes)
+            const incomingEdges = currentGraphData.edges.filter(e => {
+                if (e.target !== nodeData.id) return false;
+                // Only include edge if source node exists in the graph
+                return currentGraphData.nodes.some(n => n.id === e.source);
+            });
             if (incomingEdges.length > 0) {
                 incoming.innerHTML = incomingEdges.map(edge => {
                     const sourceNode = currentGraphData.nodes.find(n => n.id === edge.source);
@@ -2443,7 +1972,7 @@ export class WebviewManager {
                 // Add event listeners to incoming data links
                 incoming.querySelectorAll('.incoming-data-link').forEach((link, index) => {
                     const edge = incomingEdges[index];
-                    (link as HTMLAnchorElement).onclick = (e) => {
+                    link.onclick = (e) => {
                         e.preventDefault();
                         if (edge.sourceLocation) {
                             vscode.postMessage({
@@ -2460,8 +1989,12 @@ export class WebviewManager {
                 incomingSection.style.display = 'none';
             }
 
-            // Find outgoing edges
-            const outgoingEdges = currentGraphData.edges.filter(e => e.source === nodeData.id);
+            // Find outgoing edges (only show edges where target node exists - filter orphaned nodes)
+            const outgoingEdges = currentGraphData.edges.filter(e => {
+                if (e.source !== nodeData.id) return false;
+                // Only include edge if target node exists in the graph
+                return currentGraphData.nodes.some(n => n.id === e.target);
+            });
             if (outgoingEdges.length > 0) {
                 outgoing.innerHTML = outgoingEdges.map(edge => {
                     const targetNode = currentGraphData.nodes.find(n => n.id === edge.target);
@@ -2480,7 +2013,7 @@ export class WebviewManager {
                 // Add event listeners to outgoing data links
                 outgoing.querySelectorAll('.outgoing-data-link').forEach((link, index) => {
                     const edge = outgoingEdges[index];
-                    (link as HTMLAnchorElement).onclick = (e) => {
+                    link.onclick = (e) => {
                         e.preventDefault();
                         if (edge.sourceLocation) {
                             vscode.postMessage({
@@ -2663,9 +2196,12 @@ export class WebviewManager {
                     }
                     break;
             }
-        });
-    </script>
-</body>
-</html>`;
+        });`;
+
+        // Combine all scripts using the script loader
+        const scriptContent = loadScripts(graphJson, mainRendererScript);
+
+        // Use the template to generate the full HTML
+        return getHtmlTemplate(webviewStyles, scriptContent);
     }
 }

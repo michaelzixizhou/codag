@@ -9,6 +9,7 @@ import { WorkflowGraph } from '../api';
 import { WorkflowMetadataProvider } from './metadata-provider';
 import { ViewState, WorkflowMetadata } from './types';
 import { CodeModifier } from './code-modifier';
+import { filterOrphanedNodes } from './graph-filter';
 
 export function registerWorkflowParticipant(
   context: vscode.ExtensionContext,
@@ -83,12 +84,16 @@ export function registerWorkflowParticipant(
 
       console.log('✅ [@workflow] Found graph with', graph.nodes.length, 'nodes');
 
+      // Filter out orphaned nodes and their edges (match webview rendering)
+      const filteredGraph = filterOrphanedNodes(graph);
+      console.log('🔍 [@workflow] Filtered to', filteredGraph.nodes.length, 'nodes in LLM workflows');
+
       // Extract metadata with view awareness (including code snippets for visible nodes)
       const selectedNodeId = viewState?.selectedNodeId || undefined;
       const visibleNodeIds = viewState?.visibleNodeIds || undefined;
-      const targetFile = filePath || (selectedNodeId ? graph.nodes.find((n: any) => n.id === selectedNodeId)?.source?.file : undefined) || '';
+      const targetFile = filePath || (selectedNodeId ? filteredGraph.nodes.find((n: any) => n.id === selectedNodeId)?.source?.file : undefined) || '';
       const metadata = await metadataProvider.extractMetadata(
-        graph,
+        filteredGraph,
         targetFile,
         selectedNodeId,
         visibleNodeIds,
@@ -99,12 +104,12 @@ export function registerWorkflowParticipant(
       );
 
       // Build context string
-      const contextStr = formatMetadata(metadata, targetFile, viewState, graph);
+      const contextStr = formatMetadata(metadata, targetFile, viewState, filteredGraph);
       console.log('📊 [@workflow] Context size:', contextStr.length, 'chars');
 
       // Show what we know
       if (viewState?.selectedNodeId) {
-        const node = graph.nodes.find((n: any) => n.id === viewState.selectedNodeId);
+        const node = filteredGraph.nodes.find((n: any) => n.id === viewState.selectedNodeId);
         if (node) {
           stream.markdown(`**Currently viewing:** ${node.label} (${node.type})\n\n`);
         }

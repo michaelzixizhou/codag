@@ -3,6 +3,7 @@ import { CacheManager } from '../cache';
 import { WorkflowGraph } from '../api';
 import { ViewState } from './types';
 import { filterToExpandedWorkflows } from './filter-utils';
+import { filterOrphanedNodes } from './graph-filter';
 
 interface WorkflowQueryInput {
     workflowName: string;
@@ -36,10 +37,14 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
                 ]);
             }
 
+            // Filter out orphaned nodes and their edges (match webview rendering)
+            const filteredGraph = filterOrphanedNodes(graph);
+            console.log(`[workflow-query] Filtered to ${filteredGraph.nodes.length} nodes in LLM workflows`);
+
             // Filter to only visible/expanded workflows from ViewState
             const viewState = this.getViewState();
             const visibleWorkflows = filterToExpandedWorkflows(
-                graph.workflows,
+                filteredGraph.workflows,
                 viewState?.expandedWorkflowIds || []
             );
             if (viewState?.expandedWorkflowIds && viewState.expandedWorkflowIds.length > 0) {
@@ -61,11 +66,11 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
             }
 
             // Get all nodes in this workflow
-            const workflowNodes = graph.nodes.filter(n => workflow.nodeIds.includes(n.id));
+            const workflowNodes = filteredGraph.nodes.filter(n => workflow.nodeIds.includes(n.id));
 
             // Helper to create clickable node link
             const createNodeLink = (nodeId: string): string => {
-                const node = graph.nodes.find(n => n.id === nodeId);
+                const node = filteredGraph.nodes.find(n => n.id === nodeId);
                 if (!node) return nodeId;
                 const commandUri = `command:aiworkflowviz.focusNode?${encodeURIComponent(JSON.stringify([nodeId, node.label]))}`;
                 return `[${node.label}](${commandUri} "${node.label} (${node.type})")`;
@@ -123,7 +128,7 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
             }
 
             // Show critical path if available
-            const criticalPathEdges = graph.edges.filter(e => e.isCriticalPath);
+            const criticalPathEdges = filteredGraph.edges.filter(e => e.isCriticalPath);
             if (criticalPathEdges.length > 0) {
                 // Build path from edges
                 const criticalNodeIds = new Set<string>();

@@ -360,14 +360,18 @@ export function activate(context: vscode.ExtensionContext) {
                 log(`Sending POST /analyze: 1 file, framework: ${framework || 'none'}`);
 
                 graph = await api.analyzeWorkflow(content, [filePath], framework || undefined, [metadata]);
-                await cache.setPerFile(filePath, content, graph);
+
+                // Only cache if not in bypass mode
+                if (!bypassCache) {
+                    await cache.setPerFile(filePath, content, graph);
+                }
 
                 // Calculate and log duration
                 const duration = Date.now() - startTime;
                 const minutes = Math.floor(duration / 60000);
                 const seconds = Math.floor((duration % 60000) / 1000);
                 const timeStr = minutes > 0 ? `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''}` : `${seconds} second${seconds !== 1 ? 's' : ''}`;
-                log(`Analysis complete in ${timeStr}, cached result`);
+                log(`Analysis complete in ${timeStr}${bypassCache ? ' (not cached)' : ', cached result'}`);
                 webview.notifyAnalysisComplete(true);
             } else {
                 log(`Using cached result for ${filePath}`);
@@ -439,6 +443,9 @@ export function activate(context: vscode.ExtensionContext) {
 
         log('Starting workspace scan...');
         log(`Workspace root: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath}`);
+        if (bypassCache) {
+            log('⚠️  BYPASS MODE: Cache reading/writing disabled for this analysis');
+        }
 
         try {
             const workflowFiles = await WorkflowDetector.detectInWorkspace();
@@ -623,14 +630,19 @@ export function activate(context: vscode.ExtensionContext) {
                                         log(`  Fallback file complete: ${fileGraph.nodes.length} nodes`);
                                     } catch (fileError: any) {
                                         log(`  Failed to analyze ${file.path}: ${fileError.message}`);
-                                        log(`  ${relativePath} is unrelated to LLM workflows, caching empty result`);
-                                        // Cache empty graph to prevent infinite retries
-                                        await cache.setPerFile(file.path, file.content, {
-                                            nodes: [],
-                                            edges: [],
-                                            llms_detected: [],
-                                            workflows: []
-                                        });
+
+                                        // Only cache failures if not in bypass mode (prevent poisoning cache during debugging)
+                                        if (!bypassCache) {
+                                            log(`  ${relativePath} is unrelated to LLM workflows, caching empty result`);
+                                            await cache.setPerFile(file.path, file.content, {
+                                                nodes: [],
+                                                edges: [],
+                                                llms_detected: [],
+                                                workflows: []
+                                            });
+                                        } else {
+                                            log(`  ${relativePath} failed analysis (not caching due to bypass mode)`);
+                                        }
                                     }
                                 };
                             });
@@ -663,17 +675,24 @@ export function activate(context: vscode.ExtensionContext) {
                                 workflows: fileGraph.workflows || []
                             };
 
-                            await cache.setPerFile(file.path, file.content, isolatedGraph);
+                            // Only cache if not in bypass mode
+                            if (!bypassCache) {
+                                await cache.setPerFile(file.path, file.content, isolatedGraph);
+                            }
                         } else {
                             // File produced no nodes (rejected by LLM or no LLM usage)
-                            // Cache empty graph to prevent retries
-                            log(`  ${vscode.workspace.asRelativePath(file.path)} is unrelated to LLM workflows, caching empty result`);
-                            await cache.setPerFile(file.path, file.content, {
-                                nodes: [],
-                                edges: [],
-                                llms_detected: [],
-                                workflows: []
-                            });
+                            // Only cache empty result if not in bypass mode
+                            if (!bypassCache) {
+                                log(`  ${vscode.workspace.asRelativePath(file.path)} is unrelated to LLM workflows, caching empty result`);
+                                await cache.setPerFile(file.path, file.content, {
+                                    nodes: [],
+                                    edges: [],
+                                    llms_detected: [],
+                                    workflows: []
+                                });
+                            } else {
+                                log(`  ${vscode.workspace.asRelativePath(file.path)} has no LLM nodes (not caching due to bypass mode)`);
+                            }
                         }
                     }
 

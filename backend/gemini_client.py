@@ -164,9 +164,17 @@ EDGE LABELS (CRITICAL - EVERY EDGE MUST HAVE):
    - Example: "User request containing code to analyze"
    - Example: "Parsed JSON workflow graph from LLM"
    - Keep brief but informative
-4. "sourceLocation": Where variable is passed (file/line/function)
-   - Use source node's location if variable is output
-   - Use target node's location if variable is input
+4. "sourceLocation": Where the data operation actually occurs (file/line/function)
+   - For INCOMING data (edges entering a node): Point to where the variable is CREATED/ASSIGNED before being passed
+   - For OUTGOING data (edges leaving a node): Point to where the output is CONSUMED/USED after being received
+   - NEVER point to function parameters or return statements themselves
+
+   Examples:
+   - If function A creates variable "user_input" at line 45 and passes it to function B:
+     → Edge sourceLocation should point to line 45 (where user_input is created/assigned in A)
+   - If function B returns "result" that function A stores in "response" at line 52:
+     → Edge sourceLocation should point to line 52 (where result is used/stored in A)
+   - Focus on actual data flow: creation → usage, not function signatures
 5. VALIDATION: Every edge MUST have at least "label" field filled
 
 EXAMPLE WORKFLOW:
@@ -233,6 +241,11 @@ VALIDATION STEPS (PERFORM BEFORE FINALIZING):
 2. Find the last node in critical path - verify it has "isExitPoint": true
 3. Trace the path - it should form ONE continuous line with NO forks
 4. If path doesn't start at entry or end at exit, you MUST fix it
+5. EDGE SOURCE LOCATIONS: Verify each edge's sourceLocation follows data flow logic:
+   - Incoming edge (data entering node): sourceLocation points to where data is CREATED (in source node)
+   - Outgoing edge (data leaving node): sourceLocation points to where data is USED (in target node)
+   - This enables developers to trace actual data flow through the codebase
+   - NEVER point to function parameter lines or return statement lines
 
 WORKFLOW IDENTIFICATION (CRITICAL):
 Identify and name logical workflow groupings based on semantic purpose. Each workflow represents a cohesive unit of functionality.
@@ -329,84 +342,83 @@ Before returning JSON:
 ════════════════════════════════════════════════════════════════════════════════
 
 INVALID EXAMPLE 1: Disconnected nodes in same workflow
-{
-  "workflows": [{
+{{
+  "workflows": [{{
     "id": "workflow_1",
     "name": "User Management",
     "nodeIds": ["login_handler", "register_handler", "reset_handler"]
-  }],
+  }}],
   "edges": [
-    {"source": "login_entry", "target": "login_handler"}
-    // NO edges connecting register_handler or reset_handler!
+    {{"source": "login_entry", "target": "login_handler"}}
   ]
-}
+}}
+PROBLEM: register_handler and reset_handler have NO edges connecting them!
 ❌ PROBLEM: register_handler and reset_handler are orphaned
 
 INVALID EXAMPLE 2: Single node workflow
-{
-  "workflows": [{
+{{
+  "workflows": [{{
     "id": "workflow_1",
     "name": "Chat Helper",
     "nodeIds": ["format_response"]
-  }],
-  "nodes": [{"id": "format_response", ...}],
+  }}],
+  "nodes": [{{"id": "format_response", ...}}],
   "edges": []
-}
+}}
 ❌ PROBLEM: Only 1 node, no edges
 
 INVALID EXAMPLE 3: Node with no edges
-{
+{{
   "nodes": [
-    {"id": "helper_func", ...},
-    {"id": "main_handler", ...}
+    {{"id": "helper_func", ...}},
+    {{"id": "main_handler", ...}}
   ],
   "edges": [
-    {"source": "main_handler", "target": "llm_call"}
-    // helper_func not referenced anywhere
+    {{"source": "main_handler", "target": "llm_call"}}
   ]
-}
-❌ PROBLEM: helper_func exists but has no edges
+}}
+❌ PROBLEM: helper_func exists but has no edges (not referenced anywhere)
 
 ════════════════════════════════════════════════════════════════════════════════
 ✅ EXAMPLES OF VALID WORKFLOWS (CREATE THESE)
 ════════════════════════════════════════════════════════════════════════════════
 
 VALID EXAMPLE 1: Three connected nodes
-{
-  "workflows": [{
+{{
+  "workflows": [{{
     "id": "workflow_1",
     "name": "User Login Flow",
     "nodeIds": ["login_entry", "auth_llm", "login_exit"]
-  }],
+  }}],
   "edges": [
-    {"source": "login_entry", "target": "auth_llm"},
-    {"source": "auth_llm", "target": "login_exit"}
+    {{"source": "login_entry", "target": "auth_llm"}},
+    {{"source": "auth_llm", "target": "login_exit"}}
   ]
-}
+}}
 ✅ CORRECT: 3 nodes, all connected via edges
 
 VALID EXAMPLE 2: Split disconnected components
-{
+{{
   "workflows": [
-    {
+    {{
       "id": "workflow_1",
       "name": "User Login Flow",
       "nodeIds": ["login_entry", "auth_llm", "login_exit"]
-    },
-    {
+    }},
+    {{
       "id": "workflow_2",
       "name": "User Registration Flow",
       "nodeIds": ["register_entry", "validation_llm", "create_user", "register_exit"]
-    }
+    }}
   ],
   "edges": [
-    {"source": "login_entry", "target": "auth_llm"},
-    {"source": "auth_llm", "target": "login_exit"},
-    {"source": "register_entry", "target": "validation_llm"},
-    {"source": "validation_llm", "target": "create_user"},
-    {"source": "create_user", "target": "register_exit"}
+    {{"source": "login_entry", "target": "auth_llm"}},
+    {{"source": "auth_llm", "target": "login_exit"}},
+    {{"source": "register_entry", "target": "validation_llm"}},
+    {{"source": "validation_llm", "target": "create_user"}},
+    {{"source": "create_user", "target": "register_exit"}}
   ]
-}
+}}
 ✅ CORRECT: Two separate workflows, each fully connected
 
 ════════════════════════════════════════════════════════════════════════════════
@@ -428,7 +440,14 @@ CRITICAL JSON STRUCTURE RULES:
 5. CORRECT: "source": {{"file": "/path/to/file.py", "line": 42, "function": "function_name"}}
 6. Copy the EXACT file/line/function values from metadata above (not the bracket numbers)
 
-Return ONLY valid JSON (NOTE: source locations MUST be different for each node):
+Return ONLY valid JSON (NOTE: source locations MUST be different for each node).
+
+IMPORTANT - Edge sourceLocation in this example:
+- Edge 1 (request): Line 58 is where 'request' is created in analyze_endpoint, not the function definition
+- Edge 2 (prompt): Line 76 is where 'prompt' is built in analyze_workflow, not the function definition
+- Edge 3 (result): Line 83 is where 'result' is USED in analyze_workflow, not where it's returned from Gemini
+- Edge 4 (graph_data): Line 87 is where 'graph_data' is USED for return, not where it's parsed
+
 {{
   "nodes": [
     {{"id": "node1", "label": "API Endpoint", "description": "Receives analysis requests via POST /analyze endpoint with code and metadata", "type": "trigger", "source": {{"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}}, "isEntryPoint": true, "isCriticalPath": true}},
@@ -438,10 +457,10 @@ Return ONLY valid JSON (NOTE: source locations MUST be different for each node):
     {{"id": "node5", "label": "Return Response", "description": "Returns formatted workflow graph as JSON response to client", "type": "output", "source": {{"file": "/backend/main.py", "line": 86, "function": "analyze_workflow"}}, "isExitPoint": true, "isCriticalPath": true}}
   ],
   "edges": [
-    {{"source": "node1", "target": "node2", "label": "request", "dataType": "AnalyzeRequest", "description": "Incoming analysis request with code and metadata", "sourceLocation": {{"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}}, "isCriticalPath": true}},
-    {{"source": "node2", "target": "node3", "label": "prompt", "dataType": "str", "description": "Formatted prompt string for LLM analysis", "sourceLocation": {{"file": "/backend/main.py", "line": 74, "function": "analyze_workflow"}}, "isCriticalPath": true}},
-    {{"source": "node3", "target": "node4", "label": "result", "dataType": "str", "description": "Raw JSON response text from Gemini", "sourceLocation": {{"file": "/backend/gemini_client.py", "line": 172, "function": "analyze_workflow"}}, "isCriticalPath": true}},
-    {{"source": "node4", "target": "node5", "label": "graph_data", "dataType": "WorkflowGraph", "description": "Parsed and validated workflow graph object", "sourceLocation": {{"file": "/backend/main.py", "line": 85, "function": "analyze_workflow"}}, "isCriticalPath": true}}
+    {{"source": "node1", "target": "node2", "label": "request", "dataType": "AnalyzeRequest", "description": "Incoming analysis request with code and metadata", "sourceLocation": {{"file": "/backend/main.py", "line": 58, "function": "analyze_endpoint"}}, "isCriticalPath": true}},
+    {{"source": "node2", "target": "node3", "label": "prompt", "dataType": "str", "description": "Formatted prompt string for LLM analysis", "sourceLocation": {{"file": "/backend/main.py", "line": 76, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"source": "node3", "target": "node4", "label": "result", "dataType": "str", "description": "Raw JSON response text from Gemini", "sourceLocation": {{"file": "/backend/main.py", "line": 83, "function": "analyze_workflow"}}, "isCriticalPath": true}},
+    {{"source": "node4", "target": "node5", "label": "graph_data", "dataType": "WorkflowGraph", "description": "Parsed and validated workflow graph object", "sourceLocation": {{"file": "/backend/main.py", "line": 87, "function": "analyze_workflow"}}, "isCriticalPath": true}}
   ],
   "workflows": [
     {{"id": "workflow_1", "name": "Code Analysis Pipeline", "description": "Receives code via API endpoint, analyzes it using Gemini LLM to extract workflow structure, and returns the parsed graph to the client.", "nodeIds": ["node1", "node2", "node3", "node4", "node5"]}}

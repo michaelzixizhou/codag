@@ -3,6 +3,7 @@ import { CacheManager } from '../cache';
 import { WorkflowGraph } from '../api';
 import { ViewState } from './types';
 import { filterToExpandedNodes, filterToExpandedWorkflows } from './filter-utils';
+import { filterOrphanedNodes } from './graph-filter';
 
 interface NodeQueryInput {
     nodeIds?: string[];
@@ -39,16 +40,20 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
                 ]);
             }
 
+            // Filter out orphaned nodes and their edges (match webview rendering)
+            const filteredGraph = filterOrphanedNodes(graph);
+            console.log(`[node-query] Filtered to ${filteredGraph.nodes.length} nodes in LLM workflows`);
+
             // Filter to only nodes in visible/expanded workflows
             const viewState = this.getViewState();
             let nodes = filterToExpandedNodes(
-                graph.nodes,
-                graph.workflows,
+                filteredGraph.nodes,
+                filteredGraph.workflows,
                 viewState?.expandedWorkflowIds || []
             );
             if (viewState?.expandedWorkflowIds && viewState.expandedWorkflowIds.length > 0) {
                 const visibleWorkflows = filterToExpandedWorkflows(
-                    graph.workflows,
+                    filteredGraph.workflows,
                     viewState.expandedWorkflowIds
                 );
                 console.log(`[node-query] Filtered to ${nodes.length} nodes in ${visibleWorkflows.length} expanded workflows`);
@@ -82,7 +87,7 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
             if (input.connectedTo) {
                 const connectedNodeIds = new Set<string>();
                 // Find edges connected to this node
-                graph.edges.forEach(edge => {
+                filteredGraph.edges.forEach(edge => {
                     if (edge.source === input.connectedTo) {
                         connectedNodeIds.add(edge.target);
                     }
@@ -102,7 +107,7 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
             // Build adjacency info
             const beforeMap = new Map<string, string[]>();
             const afterMap = new Map<string, string[]>();
-            graph.edges.forEach(edge => {
+            filteredGraph.edges.forEach(edge => {
                 if (!afterMap.has(edge.source)) afterMap.set(edge.source, []);
                 afterMap.get(edge.source)!.push(edge.target);
 
@@ -112,7 +117,7 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
 
             // Helper to create clickable node link
             const createNodeLink = (nodeId: string): string => {
-                const node = graph.nodes.find(n => n.id === nodeId);
+                const node = filteredGraph.nodes.find(n => n.id === nodeId);
                 if (!node) return nodeId;
                 const commandUri = `command:aiworkflowviz.focusNode?${encodeURIComponent(JSON.stringify([nodeId, node.label]))}`;
                 return `[${node.label}](${commandUri} "${node.label} (${node.type})")`;

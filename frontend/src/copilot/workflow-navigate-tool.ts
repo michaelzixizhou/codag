@@ -3,6 +3,7 @@ import { CacheManager } from '../cache';
 import { WorkflowGraph } from '../api';
 import { ViewState } from './types';
 import { filterGraphToExpanded } from './filter-utils';
+import { filterOrphanedNodes } from './graph-filter';
 
 interface WorkflowNavigateInput {
     operation: 'path' | 'upstream' | 'downstream';
@@ -39,10 +40,14 @@ class WorkflowNavigateTool implements vscode.LanguageModelTool<WorkflowNavigateI
                 ]);
             }
 
+            // Filter out orphaned nodes and their edges (match webview rendering)
+            const graphWithoutOrphans = filterOrphanedNodes(graph);
+            console.log(`[workflow-navigate] Filtered to ${graphWithoutOrphans.nodes.length} nodes in LLM workflows`);
+
             // Filter to only nodes in visible/expanded workflows
             const viewState = this.getViewState();
             const filteredGraph = filterGraphToExpanded(
-                graph,
+                graphWithoutOrphans,
                 viewState?.expandedWorkflowIds || []
             );
             if (viewState?.expandedWorkflowIds && viewState.expandedWorkflowIds.length > 0) {

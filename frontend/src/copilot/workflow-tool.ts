@@ -7,6 +7,7 @@ import { CacheManager } from '../cache';
 import { WorkflowGraph } from '../api';
 import { WorkflowMetadataProvider } from './metadata-provider';
 import { WorkflowToolInput, WorkflowMetadata, ViewState } from './types';
+import { filterOrphanedNodes } from './graph-filter';
 
 export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToolInput> {
   constructor(
@@ -70,6 +71,10 @@ export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToo
 
       console.log('✅ [Workflow Tool] Found graph with', graph.nodes.length, 'nodes');
 
+      // Filter out orphaned nodes and their edges (match webview rendering)
+      const filteredGraph = filterOrphanedNodes(graph);
+      console.log('🔍 [Workflow Tool] Filtered to', filteredGraph.nodes.length, 'nodes in LLM workflows');
+
       // Get view state from webview
       const viewState = this.getViewState();
       console.log('👁️  [Workflow Tool] View state:', viewState);
@@ -77,7 +82,7 @@ export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToo
       // Extract metadata for this file with view awareness
       const selectedNodeId = viewState?.selectedNodeId || undefined;
       const visibleNodeIds = viewState?.visibleNodeIds || undefined;
-      const metadata = await this.metadataProvider.extractMetadata(graph, filePath, selectedNodeId, visibleNodeIds);
+      const metadata = await this.metadataProvider.extractMetadata(filteredGraph, filePath, selectedNodeId, visibleNodeIds);
 
       console.log('📊 [Workflow Tool] Returning context with', metadata.adjacentNodes.length, 'nodes');
       if (visibleNodeIds && visibleNodeIds.length > 0) {
@@ -88,7 +93,7 @@ export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToo
       }
 
       // Return formatted metadata as text
-      const formattedContext = this.formatMetadata(metadata, filePath, viewState, graph);
+      const formattedContext = this.formatMetadata(metadata, filePath, viewState, filteredGraph);
       console.log('📤 [Workflow Tool] Context preview:', formattedContext.substring(0, 200) + '...');
 
       return new vscode.LanguageModelToolResult([
