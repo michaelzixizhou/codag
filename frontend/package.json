@@ -45,7 +45,159 @@
           "description": "Backend API URL"
         }
       }
-    }
+    },
+    "chatParticipants": [
+      {
+        "id": "aiworkflowviz.workflow",
+        "name": "workflow",
+        "fullName": "AI Workflow Expert",
+        "description": "Expert in LLM workflow architecture, node relationships, and code generation for workflow modifications",
+        "isSticky": true,
+        "disambiguation": [
+          {
+            "category": "workflow_architecture",
+            "description": "Questions about LLM workflow nodes, edges, architecture, or modifying workflow steps",
+            "examples": [
+              "How do I add a node between X and Y?",
+              "What nodes come after the LLM call?",
+              "Explain the critical path in this workflow",
+              "Show me the cross-file dependencies",
+              "Add validation before this step",
+              "What's the workflow structure?"
+            ]
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "workflow-context",
+        "displayName": "Workflow Context",
+        "modelDescription": "Provides AI workflow graph context based on what the user is currently viewing in the workflow visualization panel. Automatically detects the active file, selected node in the visualization, and visible workflows. Use this tool when the user asks about: LLM workflows, workflow nodes, adding/modifying workflow steps, inserting nodes between existing steps, or working with multi-file LLM architectures. The tool returns node adjacency (what comes before/after each node), cross-file dependencies, workflow structure (entry/exit points, critical paths), and prioritizes the currently selected node. No parameters are typically needed - it auto-detects everything from the active editor and visualization state.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Optional: Path to the file. Auto-detects from active editor if not provided."
+            },
+            "operation": {
+              "type": "string",
+              "description": "Optional: Type of operation being performed (e.g., 'insert_node', 'modify_workflow')."
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "workflow-file-reader",
+        "displayName": "Workflow File Reader",
+        "modelDescription": "Reads source code file contents from the user's workspace. Use this when you need to see the actual implementation code for workflow nodes, examine function definitions, or understand code context. Can read entire files or specific line ranges. Useful when the user asks to modify code, add new functionality, or understand implementation details of workflow steps.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the file to read"
+            },
+            "lineStart": {
+              "type": "number",
+              "description": "Optional: Starting line number (1-indexed)"
+            },
+            "lineEnd": {
+              "type": "number",
+              "description": "Optional: Ending line number (1-indexed)"
+            }
+          },
+          "required": ["filePath"]
+        }
+      },
+      {
+        "name": "workflow-query",
+        "displayName": "Workflow Query",
+        "modelDescription": "Retrieves complete information about a specific workflow by name. Returns all nodes in the workflow with their types, source locations, entry/exit points, and critical path information. Use this when the user asks about a specific workflow's structure, wants to see all steps in a workflow, or needs to understand the complete flow of a named workflow. The response includes clickable node links that focus the visualization.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "workflowName": {
+              "type": "string",
+              "description": "Name of the workflow to query (case-insensitive partial match)"
+            },
+            "includeDetails": {
+              "type": "boolean",
+              "description": "Whether to include detailed node information (source file, location, function). Defaults to false for concise output."
+            }
+          },
+          "required": ["workflowName"]
+        }
+      },
+      {
+        "name": "node-query",
+        "displayName": "Node Query",
+        "modelDescription": "Searches and filters workflow nodes by various criteria: specific node IDs, workflow name, node type (trigger/llm/tool/decision/integration/memory/parser/output), or connectivity to other nodes. Returns detailed node information including source locations, adjacent nodes (what comes before/after), and optional code snippets. Use this for targeted node searches, finding nodes of a specific type, or analyzing node relationships.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "nodeIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional: Specific node IDs to query"
+            },
+            "workflowName": {
+              "type": "string",
+              "description": "Optional: Filter to nodes in a specific workflow"
+            },
+            "nodeType": {
+              "type": "string",
+              "description": "Optional: Filter by node type (trigger/llm/tool/decision/integration/memory/parser/output)"
+            },
+            "connectedTo": {
+              "type": "string",
+              "description": "Optional: Filter to nodes connected to this node ID (either before or after)"
+            },
+            "includeCodeSnippets": {
+              "type": "boolean",
+              "description": "Optional: Include code context around each node. Defaults to false."
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "workflow-navigate",
+        "displayName": "Workflow Navigator",
+        "modelDescription": "Analyzes workflow execution paths and dependencies. Supports three operations: 'path' finds the shortest execution path between two nodes, 'upstream' discovers all nodes that come before a node (dependencies), 'downstream' finds all nodes that come after a node (dependents). Use this when the user asks about execution flow, data dependencies, impact analysis, or tracing how data flows through the workflow.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "enum": ["path", "upstream", "downstream"],
+              "description": "Type of navigation: 'path' (find path between nodes), 'upstream' (find predecessors), 'downstream' (find successors)"
+            },
+            "fromNode": {
+              "type": "string",
+              "description": "Starting node ID (required for all operations)"
+            },
+            "toNode": {
+              "type": "string",
+              "description": "Target node ID (required only for 'path' operation)"
+            },
+            "workflowName": {
+              "type": "string",
+              "description": "Optional: Filter to specific workflow"
+            },
+            "maxDepth": {
+              "type": "number",
+              "description": "Optional: Maximum depth for upstream/downstream searches. Defaults to 5."
+            }
+          },
+          "required": ["operation", "fromNode"]
+        }
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

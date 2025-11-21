@@ -248,6 +248,11 @@ export const webviewStyles = `
     }
     .loading-content {
         display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .loading-content > div:first-child {
+        display: flex;
         align-items: center;
         gap: 8px;
     }
@@ -270,6 +275,52 @@ export const webviewStyles = `
     @keyframes spin {
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
+    }
+    .progress-bar-container {
+        width: 100%;
+        height: 4px;
+        background: var(--vscode-progressBar-background);
+        border-radius: 2px;
+        margin-top: 8px;
+        overflow: hidden;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        background: var(--vscode-progressBar-foreground);
+        width: 0%;
+        transition: width 0.3s ease;
+        border-radius: 2px;
+    }
+    .progress-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 3000;
+    }
+    .overlay-content {
+        background: var(--vscode-editor-background);
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 8px;
+        padding: 24px 32px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+    .overlay-spinner {
+        font-size: 32px;
+        animation: spin 1s linear infinite;
+    }
+    .overlay-text {
+        font-size: 14px;
+        color: var(--vscode-foreground);
     }
     .side-panel {
         position: fixed;

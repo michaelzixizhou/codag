@@ -2,7 +2,7 @@
  * Grid system constants and utilities
  */
 
-export const GRID_SIZE = 50; // 50px grid, nodes are 1x1 grid units
+export const GRID_SIZE = 5; // 5px grid for precise alignment
 
 /**
  * Snap value to nearest grid point

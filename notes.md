@@ -222,3 +222,6 @@
   dive vs. bird's eye view?)
 
   What resonates most with you from these ideas?
+
+
+Prisma schemas, manual input about workflows

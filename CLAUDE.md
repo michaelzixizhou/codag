@@ -18,7 +18,7 @@ VSCode extension that visualizes AI/LLM workflows using Gemini 2.5 Flash. Analyz
 - Metadata builder creates file batches (`frontend/src/metadata-builder.ts`)
 - Sends code to backend `/analyze` endpoint with file metadata
 - Backend uses Gemini to extract workflow nodes/edges (`backend/gemini_client.py`)
-- Frontend caches results using workspace-level content hash (`frontend/src/cache.ts`)
+- Frontend caches results per-file using AST-aware content hash (`frontend/src/cache.ts`)
 - Webview displays interactive graph with clickable nodes (`frontend/src/webview.ts`)
 
 **Key Design Decisions:**
@@ -26,8 +26,7 @@ VSCode extension that visualizes AI/LLM workflows using Gemini 2.5 Flash. Analyz
 - Multi-file analysis: Combines files with `# File: path` markers
 - Deterministic LLM output: Temperature 0.0, specific prompt structure
 - **AST-aware caching**: Only hashes LLM-relevant code (ignores comments/whitespace changes)
-- **Workspace-level caching**: Caches entire batch graph to preserve cross-file edges
-- **Deterministic file ordering**: Files sorted by path before hashing for consistent cache keys
+- **Per-file caching**: Each file cached independently; only changed files reanalyzed (no cross-file edges)
 - **Separated SVG layers**: Edge paths container rendered before edge labels container
 - **Critical path validation**: Must start at entry point, end at exit point, no branching
 - **Workflow connectivity**: All nodes must be reachable via edges, no orphaned nodes
@@ -80,7 +79,7 @@ npm run compile     # Compile TypeScript
 - `frontend/src/webview/styles.ts` - All CSS styling (NO `!important` on critical path for hover to work)
 - `frontend/src/webview/icons.ts` - SVG icons for 8 node types
 - `frontend/src/analyzer.ts` - Client-side LLM detection patterns
-- `frontend/src/cache.ts` - Workspace-level caching with deterministic file sorting (lines 136-184)
+- `frontend/src/cache.ts` - Per-file caching with AST-aware hashing (`getPerFile`, `setPerFile`, `getMultiplePerFile`)
 - `frontend/src/static-analyzer.ts` - TypeScript/Python AST parsing for LLM-relevant code extraction
 - `frontend/src/metadata-builder.ts` - File dependency analysis and batching logic
 
@@ -116,10 +115,6 @@ Each node includes `source: {file, line, function}` for code navigation.
 - Clear cache via command palette: "AI Workflow Visualizer: Clear Cache"
 
 ## Known Issues & Solutions
-
-**Cache misses after reload:**
-- Cause: File order inconsistency in hash calculation
-- Solution: Files now sorted by path before hashing (fixed in `cache.ts` lines 140-147, 164-171)
 
 **Critical path edge hover not working:**
 - Cause: CSS `!important` declarations override inline hover styles

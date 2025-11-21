@@ -146,65 +146,6 @@ export class CacheManager {
     }
 
     /**
-     * Get cached workspace graph by combined hash of all files
-     */
-    async getWorkspace(filePaths: string[], contents: string[]): Promise<WorkflowGraph | null> {
-        await this.initPromise;
-
-        // Sort files by path BEFORE creating hashes to ensure deterministic ordering
-        const sortedFiles = filePaths
-            .map((path, i) => ({ path, content: contents[i] }))
-            .sort((a, b) => a.path.localeCompare(b.path));
-
-        // Create combined hash from sorted file hashes (using relative paths for portability)
-        const fileHashes = sortedFiles
-            .map(f => {
-                const relativePath = vscode.workspace.asRelativePath(f.path);
-                return `${relativePath}:${this.hashContentAST(f.content, f.path)}`;
-            })
-            .join('|');
-
-        const workspaceHash = crypto.createHash('sha256').update(fileHashes).digest('hex');
-        const cacheKey = `workspace:${workspaceHash}`;
-        const entry = this.perFileCache[cacheKey];
-
-        if (!entry) return null;
-        return entry.graph;
-    }
-
-    /**
-     * Cache workspace graph by combined hash of all files
-     */
-    async setWorkspace(filePaths: string[], contents: string[], graph: WorkflowGraph) {
-        await this.initPromise;
-
-        // Sort files by path BEFORE creating hashes to ensure deterministic ordering
-        const sortedFiles = filePaths
-            .map((path, i) => ({ path, content: contents[i] }))
-            .sort((a, b) => a.path.localeCompare(b.path));
-
-        // Create combined hash from sorted file hashes (using relative paths for portability)
-        const fileHashes = sortedFiles
-            .map(f => {
-                const relativePath = vscode.workspace.asRelativePath(f.path);
-                return `${relativePath}:${this.hashContentAST(f.content, f.path)}`;
-            })
-            .join('|');
-
-        const workspaceHash = crypto.createHash('sha256').update(fileHashes).digest('hex');
-        const cacheKey = `workspace:${workspaceHash}`;
-
-        this.perFileCache[cacheKey] = {
-            filePath: 'workspace',
-            contentHash: workspaceHash,
-            graph,
-            timestamp: Date.now()
-        };
-
-        await this.saveCache();
-    }
-
-    /**
      * Get cached graph for a single file by content hash
      */
     async getPerFile(filePath: string, content: string): Promise<WorkflowGraph | null> {
@@ -261,6 +202,27 @@ export class CacheManager {
         }
 
         return { cachedGraphs, uncachedFiles };
+    }
+
+    /**
+     * Get most recent cached workflows (workspace-level or all files merged)
+     * Returns null if no cached workflows exist
+     */
+    async getMostRecentWorkflows(): Promise<WorkflowGraph | null> {
+        await this.initPromise;
+
+        let mostRecentEntry: PerFileCacheEntry | null = null;
+        let mostRecentTimestamp = 0;
+
+        // Find most recent cache entry (workspace or per-file)
+        for (const entry of Object.values(this.perFileCache)) {
+            if (entry.timestamp > mostRecentTimestamp) {
+                mostRecentEntry = entry;
+                mostRecentTimestamp = entry.timestamp;
+            }
+        }
+
+        return mostRecentEntry?.graph || null;
     }
 
     /**
@@ -321,5 +283,62 @@ export class CacheManager {
             llms_detected: Array.from(llmsDetectedSet),
             workflows: Array.from(mergedWorkflows.values())
         };
+    }
+
+    /**
+     * Check if a file is currently cached
+     */
+    async isFileCached(filePath: string): Promise<boolean> {
+        await this.initPromise;
+
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            return false;
+        }
+
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const relativePath = path.relative(workspaceRoot, filePath);
+
+        // Check if any cache entry matches this file
+        return Object.values(this.perFileCache).some(entry =>
+            entry.filePath === relativePath || entry.filePath === filePath
+        );
+    }
+
+    /**
+     * Invalidate cache for a specific file
+     */
+    async invalidateFile(filePath: string): Promise<void> {
+        await this.initPromise;
+
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            return;
+        }
+
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const relativePath = path.relative(workspaceRoot, filePath);
+
+        // Remove all cache entries for this file
+        const keysToDelete: string[] = [];
+        for (const [key, entry] of Object.entries(this.perFileCache)) {
+            if (entry.filePath === relativePath || entry.filePath === filePath) {
+                keysToDelete.push(key);
+            }
+        }
+
+        for (const key of keysToDelete) {
+            delete this.perFileCache[key];
+        }
+
+        await this.saveCache();
+    }
+
+    /**
+     * Get all cached graphs
+     */
+    async getAllCachedGraphs(): Promise<WorkflowGraph[]> {
+        await this.initPromise;
+        return Object.values(this.perFileCache).map(entry => entry.graph);
     }
 }

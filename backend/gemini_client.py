@@ -258,31 +258,158 @@ WORKFLOW DETECTION:
 4. Group nodes that serve the same high-level purpose
 5. CRITICAL: Each workflow MUST contain at least 1 LLM call node (type: "llm")
 
-WORKFLOW GROUPING RULES:
-- ONLY create workflows that include LLM API calls (workflows without LLM nodes will be ignored)
-- If code has clear separation (different endpoints, distinct flows): Create separate workflows
-- If nodes work together for one goal: Group into single workflow
-- Minimum: 1 workflow with LLM nodes
-- Nodes NOT connected to any LLM workflow should be excluded from the graph entirely
+════════════════════════════════════════════════════════════════════════════════
+🚨 ABSOLUTE REQUIREMENTS - VIOLATIONS WILL CAUSE SYSTEM FAILURE 🚨
+════════════════════════════════════════════════════════════════════════════════
 
-WORKFLOW CONNECTIVITY VALIDATION (CRITICAL - MUST ENFORCE):
-Every workflow MUST form a fully connected graph with NO orphaned or disconnected nodes.
+RULE #1: EVERY NODE MUST HAVE EDGES
+- If a node has ZERO edges (no source, no target in any edge), DO NOT CREATE IT
+- Nodes without edges are INVALID and will cause rendering errors
+- Check EVERY node before adding it to the response
 
-CONNECTIVITY RULES:
-1. EVERY node in a workflow MUST be reachable from an entry point through edges
-2. EVERY node (except entry points) MUST have at least ONE incoming edge from another node IN THE SAME WORKFLOW
-3. EVERY node (except exit points) MUST have at least ONE outgoing edge to another node IN THE SAME WORKFLOW
-4. NO orphaned nodes - if a node has no edges connecting it to other workflow nodes, DO NOT include it in that workflow
-5. NO isolated clusters - all nodes in a workflow must form ONE connected component
+RULE #2: EVERY WORKFLOW MUST BE FULLY CONNECTED
+- ALL nodes in a workflow MUST be reachable from each other via edges
+- If you have nodes A, B, C in workflow "X", there MUST be edge paths connecting them
+- WRONG: workflow "X" has nodes [A, B, C] but only edge A→B (C is disconnected)
+- CORRECT: workflow "X" has nodes [A, B, C] with edges A→B, B→C (all connected)
 
-VALIDATION STEPS (PERFORM BEFORE FINALIZING):
-1. Start at each entry point (nodes with no incoming edges)
-2. Trace forward through ALL edges - can you reach every node in the workflow?
-3. If any node is unreachable, either:
-   a) Add the missing edge that connects it, OR
-   b) Remove it from the workflow entirely
-4. Verify: Every non-entry node has incoming edge(s), every non-exit node has outgoing edge(s)
-5. The final workflow should be a fully connected tree or DAG (directed acyclic graph)
+RULE #3: DISCONNECTED NODES = SEPARATE WORKFLOWS
+- If nodes are NOT connected by edges, they CANNOT be in the same workflow
+- You MUST create separate workflows for disconnected components
+- WRONG: workflow "Chat Processing" with 3 disconnected node groups
+- CORRECT: workflow "Chat Message Handler", workflow "Chat History Manager", workflow "Chat Response Generator"
+
+RULE #4: MINIMUM 3 NODES PER WORKFLOW
+- Every workflow MUST have at least 3 nodes: entry point → LLM call → exit point
+- 1-node workflows are INVALID
+- 2-node workflows are INVALID
+- If you cannot create 3+ connected nodes, DELETE the workflow
+
+════════════════════════════════════════════════════════════════════════════════
+🔍 STEP-BY-STEP VALIDATION PROCESS (PERFORM FOR EVERY WORKFLOW)
+════════════════════════════════════════════════════════════════════════════════
+
+STEP 1: CREATE NODES AND EDGES
+- Identify all LLM-related functions in the code
+- Create nodes for each function
+- Create edges showing the actual call flow between functions
+
+STEP 2: PERFORM BFS CONNECTIVITY CHECK FOR EACH WORKFLOW
+For each workflow you create:
+a) Pick any node in the workflow as starting point
+b) Follow ALL edges (both incoming and outgoing) to find connected nodes
+c) Mark all reachable nodes
+d) If ANY node in workflow.nodeIds is NOT reachable, you have disconnected components
+
+STEP 3: SPLIT DISCONNECTED COMPONENTS INTO SEPARATE WORKFLOWS
+If BFS finds disconnected groups:
+- Group 1: nodes [A, B, C] (all reachable from A)
+- Group 2: nodes [D, E] (all reachable from D, but NO path to A/B/C)
+- Group 3: node [F] (no edges at all)
+
+Create workflows:
+- workflow_1 with nodeIds: [A, B, C] (if 3+ nodes)
+- workflow_2 with nodeIds: [D, E] (DELETE - only 2 nodes)
+- workflow_3 with nodeIds: [F] (DELETE - only 1 node)
+
+STEP 4: VALIDATE EACH WORKFLOW HAS 3+ CONNECTED NODES
+After splitting:
+- Count nodes in each workflow
+- If < 3 nodes: DELETE the workflow
+- If >= 3 nodes: Keep it
+
+STEP 5: VERIFY NO ORPHANED NODES IN FINAL OUTPUT
+Before returning JSON:
+- For EVERY node in nodes array, count how many edges reference it
+- If count = 0, REMOVE the node from nodes array
+- If node appears in any workflow.nodeIds, REMOVE it from that array too
+
+════════════════════════════════════════════════════════════════════════════════
+❌ EXAMPLES OF INVALID WORKFLOWS (DO NOT CREATE THESE)
+════════════════════════════════════════════════════════════════════════════════
+
+INVALID EXAMPLE 1: Disconnected nodes in same workflow
+{
+  "workflows": [{
+    "id": "workflow_1",
+    "name": "User Management",
+    "nodeIds": ["login_handler", "register_handler", "reset_handler"]
+  }],
+  "edges": [
+    {"source": "login_entry", "target": "login_handler"}
+    // NO edges connecting register_handler or reset_handler!
+  ]
+}
+❌ PROBLEM: register_handler and reset_handler are orphaned
+
+INVALID EXAMPLE 2: Single node workflow
+{
+  "workflows": [{
+    "id": "workflow_1",
+    "name": "Chat Helper",
+    "nodeIds": ["format_response"]
+  }],
+  "nodes": [{"id": "format_response", ...}],
+  "edges": []
+}
+❌ PROBLEM: Only 1 node, no edges
+
+INVALID EXAMPLE 3: Node with no edges
+{
+  "nodes": [
+    {"id": "helper_func", ...},
+    {"id": "main_handler", ...}
+  ],
+  "edges": [
+    {"source": "main_handler", "target": "llm_call"}
+    // helper_func not referenced anywhere
+  ]
+}
+❌ PROBLEM: helper_func exists but has no edges
+
+════════════════════════════════════════════════════════════════════════════════
+✅ EXAMPLES OF VALID WORKFLOWS (CREATE THESE)
+════════════════════════════════════════════════════════════════════════════════
+
+VALID EXAMPLE 1: Three connected nodes
+{
+  "workflows": [{
+    "id": "workflow_1",
+    "name": "User Login Flow",
+    "nodeIds": ["login_entry", "auth_llm", "login_exit"]
+  }],
+  "edges": [
+    {"source": "login_entry", "target": "auth_llm"},
+    {"source": "auth_llm", "target": "login_exit"}
+  ]
+}
+✅ CORRECT: 3 nodes, all connected via edges
+
+VALID EXAMPLE 2: Split disconnected components
+{
+  "workflows": [
+    {
+      "id": "workflow_1",
+      "name": "User Login Flow",
+      "nodeIds": ["login_entry", "auth_llm", "login_exit"]
+    },
+    {
+      "id": "workflow_2",
+      "name": "User Registration Flow",
+      "nodeIds": ["register_entry", "validation_llm", "create_user", "register_exit"]
+    }
+  ],
+  "edges": [
+    {"source": "login_entry", "target": "auth_llm"},
+    {"source": "auth_llm", "target": "login_exit"},
+    {"source": "register_entry", "target": "validation_llm"},
+    {"source": "validation_llm", "target": "create_user"},
+    {"source": "create_user", "target": "register_exit"}
+  ]
+}
+✅ CORRECT: Two separate workflows, each fully connected
+
+════════════════════════════════════════════════════════════════════════════════
 
 WORKFLOW DESCRIPTION:
 - 1-2 brief sentences explaining what the workflow accomplishes

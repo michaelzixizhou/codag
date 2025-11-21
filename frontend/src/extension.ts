@@ -5,6 +5,11 @@ import { CacheManager } from './cache';
 import { WorkflowDetector } from './analyzer';
 import { WebviewManager } from './webview';
 import { metadataBuilder, FileMetadata } from './metadata-builder';
+import { registerWorkflowParticipant } from './copilot/workflow-participant';
+import { registerWorkflowTool } from './copilot/workflow-tool';
+import { registerWorkflowQueryTool } from './copilot/workflow-query-tool';
+import { registerNodeQueryTool } from './copilot/node-query-tool';
+import { registerWorkflowNavigateTool } from './copilot/workflow-navigate-tool';
 
 const outputChannel = vscode.window.createOutputChannel('AI Workflow Visualizer');
 
@@ -135,8 +140,165 @@ export function activate(context: vscode.ExtensionContext) {
     const cache = new CacheManager(context);
     const webview = new WebviewManager(context);
 
+    // Register Copilot integrations (dual approach for reliability)
+
+    // 1. Language Model Tool - Auto-invoked by Copilot (may be unreliable)
+    const toolDisposable = registerWorkflowTool(cache, () => webview.getViewState());
+    if (toolDisposable) {
+        context.subscriptions.push(toolDisposable);
+        log('Registered workflow-context tool (automatic)');
+    } else {
+        log('Warning: Language Model Tool API not available');
+    }
+
+    // 2. File Reader Tool - Allows LLM to read file contents on demand
+    const { registerFileReaderTool } = require('./copilot/file-reader-tool');
+    const fileReaderTool = registerFileReaderTool();
+    if (fileReaderTool) {
+        context.subscriptions.push(fileReaderTool);
+        log('Registered workflow-file-reader tool');
+    }
+
+    // 3. Workflow Query Tool - Allows LLM to query complete workflows by name
+    const workflowQueryTool = registerWorkflowQueryTool(cache, () => webview.getViewState());
+    if (workflowQueryTool) {
+        context.subscriptions.push(workflowQueryTool);
+        log('Registered workflow-query tool');
+    }
+
+    // 4. Node Query Tool - Allows LLM to filter and search nodes
+    const nodeQueryTool = registerNodeQueryTool(cache, () => webview.getViewState());
+    if (nodeQueryTool) {
+        context.subscriptions.push(nodeQueryTool);
+        log('Registered node-query tool');
+    }
+
+    // 5. Workflow Navigate Tool - Allows LLM to find paths and analyze dependencies
+    const navigateTool = registerWorkflowNavigateTool(cache, () => webview.getViewState());
+    if (navigateTool) {
+        context.subscriptions.push(navigateTool);
+        log('Registered workflow-navigate tool');
+    }
+
+    // 6. Chat Participant - Explicit @workflow mention (100% reliable)
+    context.subscriptions.push(registerWorkflowParticipant(context, cache, () => webview.getViewState()));
+    log('Registered @workflow chat participant (explicit)');
+
+    // File watching for auto-refresh on save
+    const fileWatcher = vscode.workspace.createFileSystemWatcher(
+        '**/*.{py,ts,js,jsx,tsx,mjs,cjs}',
+        false, // ignoreCreateEvents
+        false, // ignoreChangeEvents
+        true   // ignoreDeleteEvents
+    );
+
+    // Shared debounce mechanism to batch file changes
+    const pendingChanges = new Map<string, NodeJS.Timeout>();
+    const DEBOUNCE_MS = 2000; // 2 second debounce to handle compilation + multiple saves
+
+    const scheduleFileAnalysis = async (uri: vscode.Uri, source: string) => {
+        const filePath = uri.fsPath;
+
+        // Ignore compiled output files (they change when source files compile)
+        if (filePath.includes('/out/') || filePath.includes('\\out\\')) {
+            return;
+        }
+
+        // Clear existing timeout for this file
+        const existing = pendingChanges.get(filePath);
+        if (existing) {
+            clearTimeout(existing);
+        }
+
+        // Schedule new analysis after debounce period
+        const timeout = setTimeout(async () => {
+            pendingChanges.delete(filePath);
+            log(`File changed (${source}): ${filePath}`);
+
+            // Check if this file is in our cached workflows
+            const isCached = await cache.isFileCached(filePath);
+            if (isCached) {
+                log(`Re-analyzing changed file: ${filePath}`);
+                await analyzeAndUpdateSingleFile(uri);
+            }
+        }, DEBOUNCE_MS);
+
+        pendingChanges.set(filePath, timeout);
+    };
+
+    // File watcher for changes
+    fileWatcher.onDidChange(async (uri) => {
+        await scheduleFileAnalysis(uri, 'watcher');
+    });
+    fileWatcher.onDidCreate(async (uri) => {
+        await scheduleFileAnalysis(uri, 'create');
+    });
+    context.subscriptions.push(fileWatcher);
+
+    // Document save handler (more reliable than file watcher)
+    context.subscriptions.push(
+        vscode.workspace.onDidSaveTextDocument(async (document) => {
+            await scheduleFileAnalysis(document.uri, 'save');
+        })
+    );
+
+    // Register code modification command for Copilot integration
+    const { CodeModifier } = require('./copilot/code-modifier');
+    const codeModifier = new CodeModifier();
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aiworkflowviz.applyCodeModification', async (modification: {
+            type: 'insert' | 'modify',
+            file: string,
+            line: number,
+            code: string,
+            language: string
+        }) => {
+            try {
+                let success = false;
+
+                if (modification.type === 'insert') {
+                    // For insert, use the same file/line for before and after
+                    success = await codeModifier.insertNodeBetween(
+                        modification.file,
+                        modification.line,
+                        modification.file,
+                        modification.line + 10, // Estimate
+                        modification.code,
+                        `Code inserted via @workflow at line ${modification.line}`
+                    );
+                } else {
+                    // For modify
+                    success = await codeModifier.modifyNode(
+                        modification.file,
+                        modification.line,
+                        'Node',
+                        modification.code,
+                        `Code modified via @workflow at line ${modification.line}`
+                    );
+                }
+
+                if (success) {
+                    // After successful modification, invalidate cache and re-analyze
+                    await cache.invalidateFile(modification.file);
+                    const uri = vscode.Uri.file(modification.file);
+                    await analyzeAndUpdateSingleFile(uri);
+                }
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`Failed to apply modification: ${error.message}`);
+            }
+        })
+    );
+
+    // Register command to focus on a specific node (for clickable links from Copilot)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('aiworkflowviz.focusNode', (nodeId: string, nodeLabel?: string) => {
+            log(`Focusing on node: ${nodeId} (${nodeLabel || 'unknown'})`);
+            webview.focusNode(nodeId);
+        })
+    );
+
     log('Extension activated successfully');
-    outputChannel.show();
 
     context.subscriptions.push(
         vscode.commands.registerCommand('aiworkflowviz.login', () => auth.login())
@@ -278,9 +440,6 @@ export function activate(context: vscode.ExtensionContext) {
         log('Starting workspace scan...');
         log(`Workspace root: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath}`);
 
-        // Show webview immediately with loading state
-        webview.showLoading("Scanning workspace for AI workflows...");
-
         try {
             const workflowFiles = await WorkflowDetector.detectInWorkspace();
             log(`Found ${workflowFiles.length} workflow files:`);
@@ -311,47 +470,69 @@ export function activate(context: vscode.ExtensionContext) {
             const allPaths = fileContents.map(f => f.path);
             const allContents = fileContents.map(f => f.content);
 
-            // Check workspace-level cache first (unless bypassing)
-            let graph;
+            // Check per-file cache FIRST (unless bypassing)
+            let cachedGraphs: any[] = [];
+            let filesToAnalyze = fileContents;
+
             if (!bypassCache) {
-                log(`\nChecking workspace cache for ${workflowFiles.length} files...`);
+                log(`\nChecking per-file cache for ${workflowFiles.length} files...`);
                 try {
-                    const cachedGraph = await cache.getWorkspace(allPaths, allContents);
-                    if (cachedGraph) {
-                        log(`✓ Cache HIT: Using cached workspace graph (${cachedGraph.nodes.length} nodes, ${cachedGraph.edges.length} edges)`);
-                        graph = cachedGraph;
-                    } else {
-                        log(`✗ Cache MISS: Analyzing all ${workflowFiles.length} files`);
+                    const cacheResult = await cache.getMultiplePerFile(allPaths, allContents);
+                    cachedGraphs = cacheResult.cachedGraphs;
+                    filesToAnalyze = cacheResult.uncachedFiles;
+
+                    const cachedCount = cachedGraphs.length;
+                    const uncachedCount = filesToAnalyze.length;
+
+                    if (cachedCount > 0) {
+                        log(`✓ Cache HIT: ${cachedCount} file${cachedCount !== 1 ? 's' : ''} cached`);
+                    }
+                    if (uncachedCount > 0) {
+                        log(`✗ Cache MISS: ${uncachedCount} file${uncachedCount !== 1 ? 's' : ''} need analysis`);
                     }
                 } catch (cacheError: any) {
-                    log(`⚠️  Cache check failed: ${cacheError.message}, proceeding with analysis`);
+                    log(`⚠️  Cache check failed: ${cacheError.message}, proceeding with full analysis`);
                     console.warn('Cache check error:', cacheError);
                 }
             } else {
                 log(`\nBypassing cache, analyzing all ${workflowFiles.length} files`);
             }
 
-            if (!graph) {
-                    // Analyze all files in batches
+            // Show cached data immediately if available
+            if (cachedGraphs.length > 0) {
+                const cachedGraph = cache.mergeGraphs(cachedGraphs);
+                webview.show(cachedGraph);
+                log(`✓ Displayed ${cachedGraphs.length} cached graphs (${cachedGraph.nodes.length} nodes, ${cachedGraph.edges.length} edges)`);
+            } else {
+                // No cache, show loading screen
+                webview.showLoading("Scanning workspace for AI workflows...");
+            }
+
+            // Store newly analyzed graphs
+            const newGraphs: any[] = [];
+
+            if (filesToAnalyze.length > 0) {
+                    // Analyze uncached files in batches
                     webview.notifyAnalysisStarted();
 
-                    // Build metadata for all files
-                    log(`\nBuilding metadata for ${workflowFiles.length} files...`);
-                    const metadata = await metadataBuilder.buildMetadata(workflowFiles);
+                    // Build metadata only for uncached files
+                    const uncachedUris = filesToAnalyze.map(f => vscode.Uri.file(f.path));
+                    log(`\nBuilding metadata for ${filesToAnalyze.length} uncached files...`);
+                    const metadata = await metadataBuilder.buildMetadata(uncachedUris);
                     const totalLocations = metadata.reduce((sum, m) => sum + m.locations.length, 0);
                     log(`Found ${totalLocations} code locations`);
 
-                    // Create dependency-based batches with token limits
-                    const batches = createDependencyBatches(fileContents, metadata, 15, 800000);
+                    // Create dependency-based batches with token limits (only for uncached files)
+                    const batches = createDependencyBatches(filesToAnalyze, metadata, 15, 800000);
                     log(`\nCreated ${batches.length} batches based on file dependencies:`);
                     for (let i = 0; i < batches.length; i++) {
                         const batchTokens = batches[i].reduce((sum, f) => sum + estimateTokens(f.content), 0);
                         log(`  Batch ${i + 1}: ${batches[i].length} files (~${Math.round(batchTokens / 1000)}k tokens)`);
                     }
 
-                    // Detect framework from all files
+                    // Detect framework from uncached files
                     let framework: string | null = null;
-                    for (const file of fileContents) {
+                    for (const file of filesToAnalyze) {
                         framework = WorkflowDetector.detectFramework(file.content);
                         if (framework) break;
                     }
@@ -359,7 +540,6 @@ export function activate(context: vscode.ExtensionContext) {
                     log(`Detected framework: ${framework || 'generic LLM usage'}`);
 
                     // Analyze batches in parallel (limit concurrency to avoid rate limits)
-                    const newGraphs: any[] = [];
                     const maxConcurrency = 10;  // Gemini Flash supports ~25 req/sec (1500 RPM)
 
                     // Process batches in chunks of maxConcurrency
@@ -414,10 +594,8 @@ export function activate(context: vscode.ExtensionContext) {
                             graphs.push(batchGraph);
                             log(`Batch ${batchIndex + 1} complete: ${batchGraph.nodes.length} nodes, ${batchGraph.edges.length} edges`);
 
-                            // Update progress and show partial results
+                            // Update progress
                             webview.updateProgress(batchIndex + 1, totalBatches);
-                            const mergedSoFar = cache.mergeGraphs(graphs);
-                            webview.updateGraph(mergedSoFar);
                         } catch (batchError: any) {
                             // If batch fails (safety filter, etc), try analyzing files individually
                             log(`Batch ${batchIndex + 1} failed: ${batchError.message}`);
@@ -445,7 +623,14 @@ export function activate(context: vscode.ExtensionContext) {
                                         log(`  Fallback file complete: ${fileGraph.nodes.length} nodes`);
                                     } catch (fileError: any) {
                                         log(`  Failed to analyze ${file.path}: ${fileError.message}`);
-                                        // Continue with other files
+                                        log(`  ${relativePath} is unrelated to LLM workflows, caching empty result`);
+                                        // Cache empty graph to prevent infinite retries
+                                        await cache.setPerFile(file.path, file.content, {
+                                            nodes: [],
+                                            edges: [],
+                                            llms_detected: [],
+                                            workflows: []
+                                        });
                                     }
                                 };
                             });
@@ -458,24 +643,63 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
 
-                    // Merge all batch graphs into final workspace graph
-                    graph = cache.mergeGraphs(newGraphs);
+                    // Cache each newly analyzed file individually
+                    log(`\n✓ Caching ${filesToAnalyze.length} newly analyzed files...`);
+                    for (const file of filesToAnalyze) {
+                        // Find the graph that contains nodes from this file
+                        const fileGraph = newGraphs.find(g => g.nodes.some((n: any) => n.source?.file === file.path));
+                        if (fileGraph) {
+                            // Extract only nodes/edges for this specific file
+                            const fileNodes = fileGraph.nodes.filter((n: any) => n.source?.file === file.path);
+                            const fileNodeIds = new Set(fileNodes.map((n: any) => n.id));
+                            const fileEdges = fileGraph.edges.filter((e: any) =>
+                                fileNodeIds.has(e.source) && fileNodeIds.has(e.target)
+                            );
 
-                    // Cache the final workspace graph
-                    await cache.setWorkspace(allPaths, allContents, graph);
-                    log(`\n✓ Saved to cache: workspace graph with ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+                            const isolatedGraph = {
+                                nodes: fileNodes,
+                                edges: fileEdges,
+                                llms_detected: fileGraph.llms_detected || [],
+                                workflows: fileGraph.workflows || []
+                            };
+
+                            await cache.setPerFile(file.path, file.content, isolatedGraph);
+                        } else {
+                            // File produced no nodes (rejected by LLM or no LLM usage)
+                            // Cache empty graph to prevent retries
+                            log(`  ${vscode.workspace.asRelativePath(file.path)} is unrelated to LLM workflows, caching empty result`);
+                            await cache.setPerFile(file.path, file.content, {
+                                nodes: [],
+                                edges: [],
+                                llms_detected: [],
+                                workflows: []
+                            });
+                        }
+                    }
 
                     // Calculate and log duration
                     const duration = Date.now() - startTime;
                     const minutes = Math.floor(duration / 60000);
                     const seconds = Math.floor((duration % 60000) / 1000);
                     const timeStr = minutes > 0 ? `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''}` : `${seconds} second${seconds !== 1 ? 's' : ''}`;
-
-                    log(`\nAnalysis complete: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
-                    log(`Total time: ${timeStr}`);
+                    log(`Analysis complete in ${timeStr}`);
                     webview.notifyAnalysisComplete(true);
+                } else {
+                    log(`\n✓ All files cached, no analysis needed`);
                 }
 
+            // Merge all graphs: cached + newly analyzed
+            const graph = cache.mergeGraphs([...cachedGraphs, ...newGraphs]);
+            log(`\n✓ Final graph: ${cachedGraphs.length} cached + ${newGraphs.length} new = ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+
+
+            // Show final graph (or update if cached was already shown)
+            if (graph.nodes.length === 0 && graph.edges.length === 0) {
+                vscode.window.showWarningMessage(
+                    'No workflows detected. Files may have been rejected by the LLM or contain no LLM usage.'
+                );
+                log('⚠️  Final graph is empty - all files rejected or contain no LLM usage');
+            }
             webview.show(graph);
         } catch (error: any) {
             log(`ERROR: ${error.message}`);
@@ -492,6 +716,55 @@ export function activate(context: vscode.ExtensionContext) {
 
             webview.notifyAnalysisComplete(false, errorMsg);
             vscode.window.showErrorMessage(`Workspace scan failed: ${errorMsg}`);
+        }
+    }
+
+    async function analyzeAndUpdateSingleFile(uri: vscode.Uri) {
+        try {
+            const filePath = uri.fsPath;
+            log(`\n=== Incremental File Analysis ===`);
+            log(`File: ${vscode.workspace.asRelativePath(filePath)}`);
+
+            // Read file content
+            const document = await vscode.workspace.openTextDocument(uri);
+            const content = document.getText();
+
+            // Invalidate cache for this file
+            await cache.invalidateFile(filePath);
+
+            // Show loading indicator
+            webview.showLoading(`Updating ${vscode.workspace.asRelativePath(filePath)}...`);
+
+            // Analyze single file
+            const result = await api.analyzeWorkflow(content, [filePath]);
+
+            if (result && result.nodes && result.nodes.length > 0) {
+                // Cache the new result
+                await cache.setPerFile(filePath, content, result);
+                log(`✓ Updated cache for ${vscode.workspace.asRelativePath(filePath)}: ${result.nodes.length} nodes`);
+            } else {
+                // Cache empty result
+                await cache.setPerFile(filePath, content, {
+                    nodes: [],
+                    edges: [],
+                    llms_detected: [],
+                    workflows: []
+                });
+                log(`⚠️  No nodes found after update`);
+            }
+
+            // Get all cached graphs and merge
+            const allGraphs = await cache.getAllCachedGraphs();
+            const mergedGraph = cache.mergeGraphs(allGraphs);
+
+            // Update webview incrementally
+            webview.show(mergedGraph, true); // true = incremental update
+            webview.notifyAnalysisComplete(true);
+
+            log(`✓ Graph updated: ${mergedGraph.nodes.length} nodes, ${mergedGraph.edges.length} edges`);
+        } catch (error: any) {
+            log(`ERROR updating file: ${error.message}`);
+            webview.notifyAnalysisComplete(false, error.message);
         }
     }
 

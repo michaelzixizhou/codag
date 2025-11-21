@@ -299,11 +299,15 @@ export class StaticAnalyzer {
 
     private analyzeTypeScript(code: string, filePath: string): FileAnalysis {
         try {
+            // Enable JSX for .tsx and .jsx files
+            const isJSX = filePath.endsWith('.tsx') || filePath.endsWith('.jsx');
+
             const ast = tsParser.parse(code, {
                 loc: true,
                 range: true,
                 ecmaVersion: 2020,
-                sourceType: 'module'
+                sourceType: 'module',
+                jsx: isJSX
             });
 
             const locations: CodeLocation[] = [];
