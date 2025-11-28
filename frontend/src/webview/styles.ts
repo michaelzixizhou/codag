@@ -216,25 +216,6 @@ export const webviewStyles = `
         pointer-events: none;
         stroke-linecap: round;
     }
-    .link-label {
-        fill: var(--vscode-editor-background);
-        font-size: 10px;
-        font-weight: 600;
-        pointer-events: all;
-        user-select: none;
-        text-anchor: middle;
-        cursor: pointer;
-        transition: fill 0.2s;
-    }
-    .link-label-bg {
-        fill: var(--vscode-editor-foreground);
-        fill-opacity: 0.9;
-        pointer-events: all;
-        rx: 3;
-        ry: 3;
-        cursor: pointer;
-        transition: fill 0.2s, fill-opacity 0.2s;
-    }
     .edge-tooltip {
         position: fixed;
         background: var(--vscode-editor-background);

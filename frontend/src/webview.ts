@@ -686,35 +686,6 @@ export class WebviewManager {
                 return generateEdgePath(l, sourceNode, targetNode, targetWidth, targetHeight);
             });
 
-            linkLabelGroup.attr('transform', function(l) {
-                const sourceNode = getNodeOrCollapsedGroup(l.source);
-                const targetNode = getNodeOrCollapsedGroup(l.target);
-
-                if (!sourceNode || !targetNode) return 'translate(0,0)';
-
-                const midX = (sourceNode.x + targetNode.x) / 2;
-                const midY = (sourceNode.y + targetNode.y) / 2;
-                return 'translate(' + midX + ',' + midY + ')';
-            })
-            .style('display', function(l) {
-                // Hide labels for edges where both endpoints are inside a collapsed group
-                const sourceNodeData = currentGraphData.nodes.find(n => n.id === l.source);
-                const targetNodeData = currentGraphData.nodes.find(n => n.id === l.target);
-
-                if (!sourceNodeData || !targetNodeData) return 'block';
-
-                // Check if both nodes belong to a collapsed group
-                const sourceGroup = workflowGroups.find(g => g.collapsed && g.nodes.includes(sourceNodeData.id));
-                const targetGroup = workflowGroups.find(g => g.collapsed && g.nodes.includes(targetNodeData.id));
-
-                // Hide if both nodes are in the same collapsed group
-                if (sourceGroup && targetGroup && sourceGroup.id === targetGroup.id) {
-                    return 'none';
-                }
-
-                return 'block';
-            });
-
             // Notify extension of workflow visibility state
             const expandedWorkflowIds = workflowGroups
                 .filter(g => !g.collapsed && g.id !== 'group_orphans')
@@ -741,10 +712,8 @@ export class WebviewManager {
             nodesToRenderIds.has(e.source) && nodesToRenderIds.has(e.target)
         );
 
-        // Create two separate containers: one for edge paths, one for edge labels
-        // This ensures ALL edges are drawn beneath ALL labels
+        // Create container for edge paths
         const edgePathsContainer = g.append('g').attr('class', 'edge-paths-container');
-        const edgeLabelsContainer = g.append('g').attr('class', 'edge-labels-container');
 
         // Create edge path groups (for paths only, filtered to rendered nodes)
         const linkGroup = edgePathsContainer
@@ -759,19 +728,6 @@ export class WebviewManager {
             .attr('class', d => d.isCriticalPath ? 'link critical-path' : 'link')
             .attr('marker-end', 'url(#arrowhead)');
 
-        // Create edge label groups (separate from paths, rendered on top, filtered)
-        const linkLabelGroup = edgeLabelsContainer
-            .selectAll('g')
-            .data(edgesToRender)
-            .enter()
-            .append('g')
-            .attr('class', 'link-label-group')
-            .attr('data-edge-key', d => d.source + '->' + d.target);
-
-        const linkLabel = linkLabelGroup.append('text')
-            .attr('class', 'link-label')
-            .text(d => d.label || '');
-
         // Add invisible wider path for easier hovering
         const linkHover = linkGroup.insert('path', '.link')
             .attr('class', 'link-hover')
@@ -780,20 +736,14 @@ export class WebviewManager {
             .style('fill', 'none')
             .style('cursor', 'pointer')
             .on('mouseover', function(event, d) {
-                // Unified hover: highlight both edge path and label
+                // Highlight edge path
                 const index = edgesToRender.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
-                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
-                const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
 
                 if (d.isCriticalPath) {
                     linkElement.style('stroke', '#FF9999').style('stroke-width', '5px');
-                    labelElement.style('font-weight', 'bold').style('fill', '#ffffff');
-                    labelBgElement.style('fill', '#FF9999').style('fill-opacity', '1');
                 } else {
                     linkElement.style('stroke', '#00d9ff').style('stroke-width', '3px');
-                    labelElement.style('font-weight', 'bold').style('fill', '#ffffff');
-                    labelBgElement.style('fill', '#00d9ff').style('fill-opacity', '1');
                 }
 
                 // Show tooltip at edge midpoint
@@ -830,20 +780,14 @@ export class WebviewManager {
                 }
             })
             .on('mouseout', function(event, d) {
-                // Unified hover reset: reset both edge path and label
+                // Reset edge path
                 const index = edgesToRender.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
-                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
-                const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
 
                 if (d.isCriticalPath) {
                     linkElement.style('stroke', '#FF6B6B').style('stroke-width', '4px');
-                    labelElement.style('font-weight', null).style('fill', null);
-                    labelBgElement.style('fill', null).style('fill-opacity', null);
                 } else {
                     linkElement.style('stroke', null).style('stroke-width', null);
-                    labelElement.style('font-weight', null).style('fill', null);
-                    labelBgElement.style('fill', null).style('fill-opacity', null);
                 }
 
                 // Hide tooltip
@@ -1013,112 +957,6 @@ export class WebviewManager {
             return generateEdgePath(d, sourceNode, targetNode);
         });
 
-        // Position label groups
-        linkLabelGroup.attr('transform', d => {
-            const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
-            const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
-            if (!sourceNode || !targetNode ||
-                typeof sourceNode.x !== 'number' || typeof sourceNode.y !== 'number' ||
-                typeof targetNode.x !== 'number' || typeof targetNode.y !== 'number' ||
-                isNaN(sourceNode.x) || isNaN(sourceNode.y) ||
-                isNaN(targetNode.x) || isNaN(targetNode.y)) {
-                return 'translate(0,0)';
-            }
-            const midX = (sourceNode.x + targetNode.x) / 2;
-            const midY = (sourceNode.y + targetNode.y) / 2;
-            return 'translate(' + midX + ',' + midY + ')';
-        });
-
-        // Add background rectangles for edge labels
-        linkLabel.each(function(d) {
-            const textElement = this;
-            const bbox = textElement.getBBox();
-            const padding = 3;
-
-            // Insert rect before text in the same group
-            const group = textElement.parentNode;
-            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-            rect.setAttribute('class', 'link-label-bg');
-            rect.setAttribute('x', bbox.x - padding);
-            rect.setAttribute('y', bbox.y - padding);
-            rect.setAttribute('width', bbox.width + padding * 2);
-            rect.setAttribute('height', bbox.height + padding * 2);
-
-            group.insertBefore(rect, textElement);
-        });
-
-        // Add event handlers to label groups
-        linkLabelGroup
-            .on('mouseover', function(event, d) {
-                // Unified hover: highlight both edge path and label
-                const index = edgesToRender.indexOf(d);
-                const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
-                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
-                const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
-
-                if (d.isCriticalPath) {
-                    linkElement.style('stroke', '#FF9999').style('stroke-width', '5px');
-                    labelElement.style('font-weight', 'bold').style('fill', '#ffffff');
-                    labelBgElement.style('fill', '#FF9999').style('fill-opacity', '1');
-                } else {
-                    linkElement.style('stroke', '#00d9ff').style('stroke-width', '3px');
-                    labelElement.style('font-weight', 'bold').style('fill', '#ffffff');
-                    labelBgElement.style('fill', '#00d9ff').style('fill-opacity', '1');
-                }
-
-                // Show tooltip
-                const tooltip = document.getElementById('edgeTooltip');
-                tooltip.innerHTML = '<div><strong>Variable:</strong> ' + (d.label || 'N/A') + '</div>' +
-                    (d.dataType ? '<div><strong>Type:</strong> ' + d.dataType + '</div>' : '') +
-                    (d.description ? '<div><strong>Description:</strong> ' + d.description + '</div>' : '') +
-                    (d.sourceLocation ? '<div><strong>Location:</strong> <a href="#" class="source-link" data-file="' + d.sourceLocation.file + '" data-line="' + d.sourceLocation.line + '" onclick="event.preventDefault(); vscode.postMessage({command: \\'openFile\\', file: this.dataset.file, line: parseInt(this.dataset.line)});">' + d.sourceLocation.file.split('/').pop() + ':' + d.sourceLocation.line + '</a></div>' : '');
-
-                // Get screen position
-                const transform = d3.zoomTransform(document.querySelector('#graph svg'));
-                const svgRect = document.querySelector('#graph svg').getBoundingClientRect();
-                const sourceNode = currentGraphData.nodes.find(n => n.id === d.source);
-                const targetNode = currentGraphData.nodes.find(n => n.id === d.target);
-                const midX = (sourceNode.x + targetNode.x) / 2;
-                const midY = (sourceNode.y + targetNode.y) / 2;
-                const screenX = transform.applyX(midX) + svgRect.left;
-                const screenY = transform.applyY(midY) + svgRect.top;
-
-                tooltip.style.display = 'block';
-                tooltip.style.left = (screenX + 10) + 'px';
-                tooltip.style.top = (screenY - 10) + 'px';
-            })
-            .on('mouseout', function(event, d) {
-                // Unified hover reset: reset both edge path and label
-                const index = edgesToRender.indexOf(d);
-                const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
-                const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
-                const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
-
-                if (d.isCriticalPath) {
-                    linkElement.style('stroke', '#FF6B6B').style('stroke-width', '4px');
-                    labelElement.style('font-weight', null).style('fill', null);
-                    labelBgElement.style('fill', null).style('fill-opacity', null);
-                } else {
-                    linkElement.style('stroke', null).style('stroke-width', null);
-                    labelElement.style('font-weight', null).style('fill', null);
-                    labelBgElement.style('fill', null).style('fill-opacity', null);
-                }
-
-                // Hide tooltip
-                const tooltip = document.getElementById('edgeTooltip');
-                tooltip.style.display = 'none';
-            })
-            .on('click', function(event, d) {
-                event.stopPropagation();
-                if (d.sourceLocation) {
-                    vscode.postMessage({
-                        command: 'openFile',
-                        file: d.sourceLocation.file,
-                        line: d.sourceLocation.line
-                    });
-                }
-            });
-
         node.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
 
         // Render collapsed groups AFTER edges/nodes for proper z-index (so they're clickable)
@@ -1256,49 +1094,6 @@ export class WebviewManager {
                 const targetWidth = targetNode?.isCollapsedGroup ? 260 : 140;
                 const targetHeight = targetNode?.isCollapsedGroup ? 130 : 70;
                 return generateEdgePath(l, sourceNode, targetNode, targetWidth, targetHeight);
-            });
-
-            linkLabelGroup.attr('transform', function(l) {
-                const sourceNode = getNodeOrCollapsedGroup(l.source);
-                const targetNode = getNodeOrCollapsedGroup(l.target);
-                if (!sourceNode || !targetNode) return 'translate(0,0)';
-
-                const midX = (sourceNode.x + targetNode.x) / 2;
-                const midY = (sourceNode.y + targetNode.y) / 2;
-                return 'translate(' + midX + ',' + midY + ')';
-            })
-            .style('display', function(l) {
-                // Hide labels for edges where both endpoints are inside a collapsed group
-                const sourceNodeData = currentGraphData.nodes.find(n => n.id === l.source);
-                const targetNodeData = currentGraphData.nodes.find(n => n.id === l.target);
-
-                if (!sourceNodeData || !targetNodeData) return 'block';
-
-                // Check if both nodes belong to a collapsed group
-                const sourceGroup = workflowGroups.find(g => g.collapsed && g.nodes.includes(sourceNodeData.id));
-                const targetGroup = workflowGroups.find(g => g.collapsed && g.nodes.includes(targetNodeData.id));
-
-                // Hide if both nodes are in the same collapsed group
-                if (sourceGroup && targetGroup && sourceGroup.id === targetGroup.id) {
-                    return 'none';
-                }
-
-                return 'block';
-            });
-
-            // Update background rectangles for edge labels
-            linkLabel.each(function() {
-                const textElement = this;
-                const bbox = textElement.getBBox();
-                const padding = 3;
-                const rect = textElement.previousSibling;
-
-                if (rect && rect.classList.contains('link-label-bg')) {
-                    rect.setAttribute('x', bbox.x - padding);
-                    rect.setAttribute('y', bbox.y - padding);
-                    rect.setAttribute('width', bbox.width + padding * 2);
-                    rect.setAttribute('height', bbox.height + padding * 2);
-                }
             });
 
             // Update minimap
@@ -1539,18 +1334,6 @@ export class WebviewManager {
                     const targetWidth = targetNode?.isCollapsedGroup ? 260 : 140;
                     const targetHeight = targetNode?.isCollapsedGroup ? 130 : 70;
                     return generateEdgePath(l, sourceNode, targetNode, targetWidth, targetHeight);
-                });
-
-            // Update edge label positions
-            svg.selectAll('.link-label-group').transition().duration(500)
-                .attr('transform', function(l) {
-                    const sourceNode = getNodeOrCollapsedGroup(l.source);
-                    const targetNode = getNodeOrCollapsedGroup(l.target);
-                    if (!sourceNode || !targetNode) return 'translate(0,0)';
-
-                    const midX = (sourceNode.x + targetNode.x) / 2;
-                    const midY = (sourceNode.y + targetNode.y) / 2;
-                    return 'translate(' + midX + ',' + midY + ')';
                 });
 
             // Update minimap with new positions
@@ -2243,26 +2026,18 @@ export class WebviewManager {
             // === REMOVE EDGES ===
             diff.edges.removed.forEach(edge => {
                 const edgeKey = edge.source + '->' + edge.target;
-                // Remove from both path and label containers
                 g.select('.edge-paths-container .link-group[data-edge-key="' + edgeKey + '"]').remove();
-                g.select('.edge-labels-container .link-label-group[data-edge-key="' + edgeKey + '"]').remove();
             });
 
             // === UPDATE EXISTING EDGES ===
             diff.edges.updated.forEach(updatedEdge => {
                 const edgeKey = updatedEdge.source + '->' + updatedEdge.target;
                 const edgeEl = g.select('.edge-paths-container .link-group[data-edge-key="' + edgeKey + '"]');
-                const labelEl = g.select('.edge-labels-container .link-label-group[data-edge-key="' + edgeKey + '"]');
 
                 if (!edgeEl.empty()) {
                     // Update critical path styling
                     edgeEl.select('.link')
                         .classed('critical-path', updatedEdge.isCriticalPath || false);
-                }
-
-                if (!labelEl.empty()) {
-                    // Update label text
-                    labelEl.select('.link-label').text(updatedEdge.label || '');
                 }
             });
 
@@ -2713,30 +2488,11 @@ export class WebviewManager {
                 .on('mouseover', function(event) {
                     const transform = d3.zoomTransform(svg.node());
                     edgeGroup.select('.link').style('stroke-width', (3 / transform.k) + 'px');
-                    edgeGroup.select('.link-label').style('font-weight', 'bold');
                 })
                 .on('mouseout', function() {
                     const transform = d3.zoomTransform(svg.node());
                     edgeGroup.select('.link').style('stroke-width', (2 / transform.k) + 'px');
-                    edgeGroup.select('.link-label').style('font-weight', 'normal');
                 });
-
-            // Edge label - add to separate edge-labels-container (for z-order)
-            const midX = (sourceNode.x + targetNode.x) / 2;
-            const midY = (sourceNode.y + targetNode.y) / 2;
-
-            const labelGroup = g.select('.edge-labels-container').append('g')
-                .datum(edgeData)
-                .attr('class', 'link-label-group')
-                .attr('data-edge-key', edgeKey)
-                .attr('transform', 'translate(' + midX + ',' + midY + ')');
-
-            labelGroup.append('rect')
-                .attr('class', 'link-label-bg');
-
-            labelGroup.append('text')
-                .attr('class', 'link-label')
-                .text(edgeData.label || '');
         }
 
         // Update all edge paths (after node positions change)
@@ -2751,14 +2507,6 @@ export class WebviewManager {
 
                 d3.select(this).select('.link').attr('d', path);
                 d3.select(this).select('.link-hover').attr('d', path);
-
-                // Update label position
-                if (sourceNode && targetNode) {
-                    const midX = (sourceNode.x + targetNode.x) / 2;
-                    const midY = (sourceNode.y + targetNode.y) / 2;
-                    d3.select(this).select('.link-label-group')
-                        .attr('transform', 'translate(' + midX + ',' + midY + ')');
-                }
             });
         }
 

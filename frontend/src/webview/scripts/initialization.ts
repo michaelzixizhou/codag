@@ -9,14 +9,15 @@ export function getInitializationScript(graphJson: string): string {
 
         // Update header snapshot stats (only count visible workflows/nodes)
         function updateSnapshotStats() {
-            // Only count workflows and nodes that are actually visible (in workflowGroups)
-            const visibleWorkflowCount = typeof workflowGroups !== 'undefined' ? workflowGroups.length : 0;
+            // Only count workflows with 3+ nodes (same filter as rendering)
+            const renderedWorkflows = typeof workflowGroups !== 'undefined'
+                ? workflowGroups.filter(wf => wf.nodes.length >= 3)
+                : [];
+            const visibleWorkflowCount = renderedWorkflows.length;
 
-            // Get all visible node IDs from workflowGroups
+            // Get all visible node IDs from rendered workflows
             const visibleNodeIds = new Set();
-            if (typeof workflowGroups !== 'undefined') {
-                workflowGroups.forEach(wf => wf.nodes.forEach(id => visibleNodeIds.add(id)));
-            }
+            renderedWorkflows.forEach(wf => wf.nodes.forEach(id => visibleNodeIds.add(id)));
 
             // Count only LLM nodes that are in visible workflows
             const nodes = currentGraphData.nodes || [];
