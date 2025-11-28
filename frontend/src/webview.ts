@@ -361,6 +361,10 @@ export class WebviewManager {
             .attr('class', 'pegboard-bg')
             .lower(); // Send to back
 
+        // Cache pegboard dot selections for performance (avoid DOM queries on every zoom tick)
+        const finePatternDot = d3.select('#pegboard-fine-dot');
+        const coarsePatternDot = d3.select('#pegboard-coarse-dot');
+
         // Create zoom behavior (disable double-click zoom)
         const zoom = d3.zoom()
             .scaleExtent([0.1, 10])
@@ -374,11 +378,11 @@ export class WebviewManager {
                 if (k < 0.5) {
                     // Switch to coarse grid at low zoom
                     pegboardBg.attr('fill', 'url(#pegboard-coarse)');
-                    d3.select('#pegboard-coarse-dot').attr('opacity', opacity);
+                    coarsePatternDot.attr('opacity', opacity);
                 } else {
                     // Use fine grid at normal zoom
                     pegboardBg.attr('fill', 'url(#pegboard-fine)');
-                    d3.select('#pegboard-fine-dot').attr('opacity', opacity);
+                    finePatternDot.attr('opacity', opacity);
                 }
             });
 
@@ -777,7 +781,7 @@ export class WebviewManager {
             .style('cursor', 'pointer')
             .on('mouseover', function(event, d) {
                 // Unified hover: highlight both edge path and label
-                const index = currentGraphData.edges.indexOf(d);
+                const index = edgesToRender.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
                 const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
                 const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
@@ -827,7 +831,7 @@ export class WebviewManager {
             })
             .on('mouseout', function(event, d) {
                 // Unified hover reset: reset both edge path and label
-                const index = currentGraphData.edges.indexOf(d);
+                const index = edgesToRender.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
                 const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
                 const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
@@ -1047,7 +1051,7 @@ export class WebviewManager {
         linkLabelGroup
             .on('mouseover', function(event, d) {
                 // Unified hover: highlight both edge path and label
-                const index = currentGraphData.edges.indexOf(d);
+                const index = edgesToRender.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
                 const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
                 const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
@@ -1085,7 +1089,7 @@ export class WebviewManager {
             })
             .on('mouseout', function(event, d) {
                 // Unified hover reset: reset both edge path and label
-                const index = currentGraphData.edges.indexOf(d);
+                const index = edgesToRender.indexOf(d);
                 const linkElement = d3.select(edgePathsContainer.node().children[index]).select('.link');
                 const labelElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label');
                 const labelBgElement = d3.select(edgeLabelsContainer.node().children[index]).select('.link-label-bg');
@@ -1954,10 +1958,17 @@ export class WebviewManager {
             }, VIEWPORT_UPDATE_DELAY);
         }
 
-        // Update viewport on zoom/pan
+        // Update viewport on zoom/pan (throttled with requestAnimationFrame for performance)
+        let minimapUpdatePending = false;
         zoom.on('zoom.minimap', (event) => {
-            g.attr('transform', event.transform);
-            updateMinimapViewport();
+            // Note: transform is already applied in main zoom handler, no need to duplicate
+            if (!minimapUpdatePending) {
+                minimapUpdatePending = true;
+                requestAnimationFrame(() => {
+                    updateMinimapViewport();
+                    minimapUpdatePending = false;
+                });
+            }
             updateVisibleNodesDebounced();
         });
 
