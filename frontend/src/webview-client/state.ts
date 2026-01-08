@@ -1,5 +1,5 @@
 // Shared mutable state for webview client
-import { WorkflowGraph, WorkflowGroup, NodePosition } from './types';
+import { WorkflowGraph, WorkflowGroup, WorkflowComponent, NodePosition } from './types';
 
 // VSCode API instance
 export let vscode: any = null;
@@ -25,6 +25,12 @@ export let minimapViewportRect: any = null;
 // UI state
 export let currentlyOpenNodeId: string | null = null;
 
+// Component state (expanded components - default is collapsed)
+export let expandedComponents: Set<string> = new Set();
+
+// Shared node copies: originalId -> [virtualIds]
+export let sharedNodeCopies: Map<string, string[]> = new Map();
+
 // D3 selections for various elements
 export let node: any = null;
 export let link: any = null;
@@ -33,6 +39,10 @@ export let linkGroup: any = null;
 export let collapsedGroups: any = null;
 export let groupElements: any = null;
 export let edgePathsContainer: any = null;
+export let sharedArrowsContainer: any = null;
+
+// Expanded nodes (including virtual copies with positions)
+export let expandedNodes: any[] = [];
 
 // Containers
 export let groupContainer: any = null;
@@ -129,4 +139,53 @@ export function setCurrentlyOpenNodeId(nodeId: string | null): void {
 // Get currently open node
 export function getCurrentlyOpenNodeId(): string | null {
     return currentlyOpenNodeId;
+}
+
+// Set shared node copies map
+export function setSharedNodeCopies(copies: Map<string, string[]>): void {
+    sharedNodeCopies = copies;
+}
+
+// Get shared node copies
+export function getSharedNodeCopies(): Map<string, string[]> {
+    return sharedNodeCopies;
+}
+
+// Set shared arrows container
+export function setSharedArrowsContainer(container: any): void {
+    sharedArrowsContainer = container;
+}
+
+// Set expanded nodes
+export function setExpandedNodes(nodes: any[]): void {
+    expandedNodes = nodes;
+}
+
+// Component state management
+export function isComponentExpanded(componentId: string): boolean {
+    return expandedComponents.has(componentId);
+}
+
+export function expandComponent(componentId: string): void {
+    expandedComponents.add(componentId);
+}
+
+export function collapseComponent(componentId: string): void {
+    expandedComponents.delete(componentId);
+}
+
+export function toggleComponent(componentId: string): void {
+    if (expandedComponents.has(componentId)) {
+        expandedComponents.delete(componentId);
+    } else {
+        expandedComponents.add(componentId);
+    }
+}
+
+export function getExpandedComponents(): Set<string> {
+    return expandedComponents;
+}
+
+export function setExpandedComponents(components: Set<string>): void {
+    expandedComponents = components;
 }

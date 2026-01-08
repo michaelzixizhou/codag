@@ -1,19 +1,9 @@
 import * as vscode from 'vscode';
 import { staticAnalyzer, FileAnalysis, CodeLocation } from './static-analyzer';
+import { FileMetadata, LocationMetadata } from './types';
 
-export interface FileMetadata {
-    file: string;
-    locations: LocationMetadata[];
-    relatedFiles: string[];
-}
-
-export interface LocationMetadata {
-    line: number;
-    type: string;
-    description: string;
-    function: string;
-    variable?: string;
-}
+// Re-export for backwards compatibility
+export { FileMetadata, LocationMetadata };
 
 export class MetadataBuilder {
     /**

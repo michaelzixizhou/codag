@@ -1,6 +1,6 @@
 // HUD controls, zoom, and button tooltips
 import * as state from './state';
-import { getNodeWorkflowCount, generateEdgePath, getNodeOrCollapsedGroup } from './utils';
+import { getNodeWorkflowCount, generateEdgePath, getNodeOrCollapsedGroup, getVirtualNodeId } from './utils';
 import { renderMinimap } from './minimap';
 import { getNodeDimensions, positionTooltipNearMouse } from './helpers';
 import { measureTextWidth } from './groups';
@@ -140,8 +140,6 @@ export function fitToScreen(): void {
 export function formatGraph(updateGroupVisibility: () => void): void {
     const { svg, currentGraphData, workflowGroups, originalPositions, link, linkHover } = state;
 
-    console.log('formatGraph button clicked');
-
     // Reset all nodes to their original dagre-computed positions
     currentGraphData.nodes.forEach((node: any) => {
         const orig = originalPositions.get(node.id);
@@ -153,17 +151,52 @@ export function formatGraph(updateGroupVisibility: () => void): void {
         }
     });
 
-    // Recalculate group bounds
+    // Also update expandedNodes (which includes shared node virtual copies)
+    state.expandedNodes.forEach((node: any) => {
+        if (node._originalId) {
+            // Shared node - look up position using virtual ID
+            const pos = originalPositions.get(node.id);
+            if (pos) {
+                node.x = pos.x;
+                node.y = pos.y;
+                node.fx = pos.x;
+                node.fy = pos.y;
+            }
+        }
+    });
+
+    // Recalculate group bounds (including shared nodes)
     workflowGroups.forEach((group: any) => {
         if (group.nodes.length < 3) return;
 
-        const groupNodes = currentGraphData.nodes.filter((n: any) =>
-            group.nodes.includes(n.id) && getNodeWorkflowCount(n.id, workflowGroups) === 1
+        // Get ALL nodes in this workflow (including shared)
+        const allGroupNodes = currentGraphData.nodes.filter((n: any) =>
+            group.nodes.includes(n.id)
         );
-        if (groupNodes.length === 0) return;
+        if (allGroupNodes.length === 0) return;
 
-        const xs = groupNodes.map((n: any) => n.x);
-        const ys = groupNodes.map((n: any) => n.y);
+        // Build positions array, handling shared nodes via virtual IDs
+        const positions: { x: number; y: number }[] = [];
+        allGroupNodes.forEach((node: any) => {
+            const isShared = getNodeWorkflowCount(node.id, workflowGroups) > 1;
+            if (isShared) {
+                // Shared nodes: get position from originalPositions using virtual ID
+                const virtualId = getVirtualNodeId(node.id, group.id);
+                const pos = originalPositions.get(virtualId);
+                if (pos) {
+                    positions.push({ x: pos.x, y: pos.y });
+                }
+            } else {
+                // Non-shared nodes: use position directly from node
+                if (typeof node.x === 'number' && typeof node.y === 'number') {
+                    positions.push({ x: node.x, y: node.y });
+                }
+            }
+        });
+        if (positions.length === 0) return;
+
+        const xs = positions.map(p => p.x);
+        const ys = positions.map(p => p.y);
 
         group.bounds = {
             minX: Math.min(...xs) - GROUP_BOUNDS_PADDING_X,
@@ -249,7 +282,13 @@ export function formatGraph(updateGroupVisibility: () => void): void {
         .attr('transform', (d: any) => `translate(${d.x},${d.y})`);
 
     // Update edges
-    const getNode = (nodeId: string) => getNodeOrCollapsedGroup(nodeId, currentGraphData.nodes, workflowGroups);
+    const getNode = (nodeId: string) => {
+        // Check expandedNodes first (for virtual IDs of shared nodes)
+        const expanded = state.expandedNodes.find((n: any) => n.id === nodeId);
+        if (expanded) return expanded;
+        // Fallback to original nodes or collapsed groups
+        return getNodeOrCollapsedGroup(nodeId, currentGraphData.nodes, workflowGroups);
+    };
 
     svg.selectAll('.link').transition().duration(TRANSITION_NORMAL)
         .attr('d', function(l: any) {

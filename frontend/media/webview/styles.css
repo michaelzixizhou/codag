@@ -26,7 +26,7 @@ body {
     padding: 0 16px;
     background: var(--vscode-editor-background);
     border-bottom: 1px solid var(--vscode-panel-border);
-    z-index: 1000;
+    z-index: 1700;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -35,7 +35,7 @@ body {
 .header-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
 }
 .codag-logo {
     height: 24px;
@@ -57,7 +57,7 @@ body {
     color: var(--vscode-foreground);
 }
 .snapshot-stats .stat-divider {
-    margin: 0 4px;
+    margin: 0 2px;
     opacity: 0.3;
 }
 #controls {
@@ -123,6 +123,240 @@ body {
     height: 16px;
     fill: currentColor;
 }
+
+/* Auth Section */
+.auth-section {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 4px;
+    margin-right: 8px;
+}
+.trial-tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    background: rgba(255, 152, 0, 0.15);
+    color: #FF9800;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+.trial-tag.hidden {
+    display: none;
+}
+.signup-btn {
+    font-size: 11px;
+    padding: 4px 12px;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+.signup-btn:hover {
+    background: var(--vscode-button-hoverBackground);
+}
+.signup-btn.hidden {
+    display: none;
+}
+
+/* User profile button */
+.user-profile-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 16px;
+    cursor: pointer;
+    color: var(--vscode-foreground);
+    font-size: 12px;
+    position: relative;
+}
+.user-profile-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground);
+}
+.user-profile-btn.hidden {
+    display: none;
+}
+.user-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+.dropdown-arrow {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
+/* User dropdown */
+.user-dropdown {
+    position: absolute;
+    top: 32px;
+    left: 0;
+    width: 240px;
+    background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 2000;
+    display: none;
+}
+.user-dropdown.open {
+    display: block;
+}
+.dropdown-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+}
+.dropdown-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+.dropdown-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+.dropdown-name {
+    font-weight: 500;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dropdown-email {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dropdown-divider {
+    height: 1px;
+    background: var(--vscode-panel-border);
+    margin: 0 8px;
+}
+.dropdown-provider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+.dropdown-provider svg {
+    width: 14px;
+    height: 14px;
+}
+.dropdown-logout {
+    width: calc(100% - 16px);
+    margin: 8px;
+    padding: 8px;
+    background: transparent;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    font-size: 12px;
+}
+.dropdown-logout:hover {
+    background: var(--vscode-toolbar-hoverBackground);
+}
+
+/* Auth Panel */
+.auth-panel {
+    position: fixed;
+    top: 36px;
+    right: -320px;
+    width: 320px;
+    height: calc(100vh - 36px);
+    background: var(--vscode-editor-background);
+    border-left: 1px solid var(--vscode-panel-border);
+    transition: right 0.3s ease, transform 0.3s ease, opacity 0.3s ease;
+    z-index: 1002;
+    display: flex;
+    flex-direction: column;
+}
+.auth-panel.open {
+    right: 0;
+}
+.auth-panel.minimizing {
+    transform: scale(0.1) translate(200px, -200px);
+    opacity: 0;
+}
+.auth-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+.auth-panel-header h2 {
+    font-size: 16px;
+    font-weight: 500;
+    margin: 0;
+}
+.auth-panel-content {
+    padding: 24px 16px;
+    flex: 1;
+    overflow-y: auto;
+}
+.auth-description {
+    font-size: 13px;
+    color: var(--vscode-descriptionForeground);
+    margin-bottom: 24px;
+    text-align: center;
+}
+.oauth-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+.oauth-btn.github {
+    background: #24292e;
+    color: #ffffff;
+    border: 1px solid #24292e;
+}
+.oauth-btn.github:hover {
+    background: #2f363d;
+    border-color: #2f363d;
+}
+.oauth-btn.google {
+    background: #ffffff;
+    color: #333333;
+    border: 1px solid #dadce0;
+}
+.oauth-btn.google:hover {
+    background: #f8f9fa;
+}
+.oauth-btn svg {
+    flex-shrink: 0;
+}
+
 #graph {
     position: fixed;
     top: 36px;
@@ -194,12 +428,27 @@ body {
     transition: stroke 0.2s ease, stroke-width 0.2s ease;
     pointer-events: none;
 }
-.link.critical-path {
-    stroke-width: 6px;
-    stroke-opacity: 1;
-    stroke: #FF6B6B;
-}
 .entry-icon, .exit-icon {
+    pointer-events: none;
+}
+/* Shared node badge */
+.shared-badge {
+    pointer-events: none;
+    opacity: 0.8;
+}
+.shared-badge-icon {
+    color: var(--vscode-descriptionForeground);
+}
+.shared-badge-text {
+    font-family: var(--vscode-font-family);
+}
+/* Shared copy arrows (for hover on shared nodes) */
+.shared-copy-arrow {
+    fill: none;
+    stroke: var(--vscode-textLink-foreground);
+    stroke-width: 2px;
+    stroke-dasharray: 6, 4;
+    stroke-opacity: 0.7;
     pointer-events: none;
 }
 .node-selection-indicator {
@@ -500,6 +749,10 @@ body {
 #minimap .minimap-node.memory { fill: #4DB6AC; }
 #minimap .minimap-node.parser { fill: #A1887F; }
 #minimap .minimap-node.output { fill: #90A4AE; }
+#minimap .minimap-node.orchestrator { fill: #E91E63; }
+#minimap .minimap-node.agent { fill: #CDDC39; }
+#minimap .minimap-node.retriever { fill: #00BCD4; }
+#minimap .minimap-node.guardrail { fill: #F44336; }
 #minimap .minimap-edge {
     stroke: var(--vscode-editor-foreground);
     stroke-width: 1px;
@@ -584,7 +837,7 @@ body {
 .directory-list {
     max-height: 300px;
     overflow-y: scroll;
-    padding: 4px 0;
+    padding: 4px 0 24px 0;
     padding-right: 10px;
     position: relative;
 }

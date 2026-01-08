@@ -19,7 +19,22 @@ export interface FileAnalysis {
     llmRelatedVariables: Set<string>;
 }
 
+// LLM identifier patterns - shared across all analyzers
+const LLM_PATTERNS = [
+    /openai/i, /anthropic/i, /gemini/i, /genai/i,
+    /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
+    /llm/i, /model/i, /client/i, /chat/i, /completion/i,
+    /GenerativeModel/i, /xai/i, /grok/i
+];
+
 export class StaticAnalyzer {
+    /**
+     * Check if an identifier name is LLM-related
+     */
+    private isLLMIdentifier(name: string): boolean {
+        return LLM_PATTERNS.some(pattern => pattern.test(name));
+    }
+
     /**
      * Parse file and extract LLM workflow locations
      */
@@ -73,16 +88,6 @@ export class StaticAnalyzer {
         const seenLocations = new Set<string>(); // Track line+type to prevent duplicates
         let currentFunction = 'global';
 
-        // Helper to check if identifier is LLM-related
-        const isLLMIdentifier = (name: string): boolean => {
-            const llmPatterns = [
-                /openai/i, /anthropic/i, /gemini/i, /genai/i,
-                /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
-                /llm/i, /model/i, /client/i, /chat/i, /completion/i
-            ];
-            return llmPatterns.some(pattern => pattern.test(name));
-        };
-
         // Helper to add location without duplicates
         const addLocation = (loc: CodeLocation) => {
             const key = `${loc.line}-${loc.type}`;
@@ -112,7 +117,7 @@ export class StaticAnalyzer {
                 imports.push(source);
 
                 // Track LLM client imports
-                if (isLLMIdentifier(source)) {
+                if (this.isLLMIdentifier(source)) {
                     node.specifiers?.forEach((spec: any) => {
                         const name = spec.local?.name || spec.imported?.name;
                         if (name) llmRelatedVariables.add(name);
@@ -134,7 +139,7 @@ export class StaticAnalyzer {
 
                     // Check if initializer is LLM-related
                     if (varName && init) {
-                        if (init.type === 'NewExpression' && isLLMIdentifier(init.callee?.name || '')) {
+                        if (init.type === 'NewExpression' && this.isLLMIdentifier(init.callee?.name || '')) {
                             llmRelatedVariables.add(varName);
                             addLocation({
                                 line: node.loc.start.line,
@@ -317,16 +322,6 @@ export class StaticAnalyzer {
             const seenLocations = new Set<string>();
             let currentFunction = 'global';
 
-            // Helper to check if identifier is LLM-related
-            const isLLMIdentifier = (name: string): boolean => {
-                const llmPatterns = [
-                    /openai/i, /anthropic/i, /gemini/i, /genai/i,
-                    /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
-                    /llm/i, /model/i, /client/i, /chat/i, /completion/i
-                ];
-                return llmPatterns.some(pattern => pattern.test(name));
-            };
-
             // Helper to add location without duplicates
             const addLocation = (loc: CodeLocation) => {
                 const key = `${loc.line}-${loc.type}`;
@@ -358,7 +353,7 @@ export class StaticAnalyzer {
                         imports.push(source);
 
                         // Track LLM client imports
-                        if (isLLMIdentifier(source)) {
+                        if (this.isLLMIdentifier(source)) {
                             node.specifiers?.forEach((spec: any) => {
                                 const name = spec.local?.name || spec.imported?.name;
                                 if (name) llmRelatedVariables.add(name);
@@ -380,7 +375,7 @@ export class StaticAnalyzer {
                         const init = decl.init;
 
                         if (varName && init) {
-                            if (init.type === 'NewExpression' && isLLMIdentifier(init.callee?.name || '')) {
+                            if (init.type === 'NewExpression' && this.isLLMIdentifier(init.callee?.name || '')) {
                                 llmRelatedVariables.add(varName);
                                 if (node.loc) {
                                     addLocation({
@@ -422,7 +417,7 @@ export class StaticAnalyzer {
                             callee = parts.join('.');
                         }
 
-                        if (this.containsLLMVariable(callNode.callee, llmRelatedVariables) || isLLMIdentifier(callee)) {
+                        if (this.containsLLMVariable(callNode.callee, llmRelatedVariables) || this.isLLMIdentifier(callee)) {
                             if (callNode.loc) {
                                 addLocation({
                                     line: callNode.loc.start.line,
@@ -500,6 +495,7 @@ export class StaticAnalyzer {
             const imports: string[] = [];
             const exports: string[] = [];
             const llmRelatedVariables = new Set<string>();
+            const aiServiceVariables = new Map<string, string>(); // Map variable name -> service URL for identifying service
             const seenLocations = new Set<string>(); // Track line+type to prevent duplicates
             const functionsWithLLMCode = new Set<string>(); // Track which functions use LLM code
             const decoratorCandidates: CodeLocation[] = []; // Store decorator triggers to filter later
@@ -507,16 +503,25 @@ export class StaticAnalyzer {
             const lines = code.split('\n');
             console.log(`[Python Analysis] Analyzing ${filePath} (${lines.length} lines)`);
 
-            // Helper to check if identifier is LLM-related
-            const isLLMIdentifier = (name: string): boolean => {
-                const llmPatterns = [
-                    /genai/i, /gemini/i, /openai/i, /anthropic/i,
-                    /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
-                    /llm/i, /model/i, /client/i, /chat/i, /completion/i,
-                    /GenerativeModel/i, /Gemini/i
-                ];
-                return llmPatterns.some(pattern => pattern.test(name));
-            };
+            // AI Service domain patterns for HTTP-based AI APIs
+            const aiServiceDomains = [
+                /api\.elevenlabs\.io/i,
+                /api\.(dev\.)?runwayml\.com/i,
+                /api\.sync\.so/i,
+                /api\.stability\.ai/i,
+                /api\.d-id\.com/i,
+                /api\.heygen\.com/i,
+                /api\.x\.ai/i,
+                /api\.leonardo\.ai/i,
+            ];
+
+            // AI-specific endpoint patterns
+            const aiEndpointPatterns = [
+                /speech-to-speech|text-to-speech|voice[_-]?clone/i,
+                /image[_-]to[_-]video|video[_-]gen/i,
+                /lipsync|lip[_-]sync/i,
+                /\/generate\b/i,
+            ];
 
             // Helper to add location without duplicates
             const addLocation = (loc: CodeLocation) => {
@@ -550,7 +555,7 @@ export class StaticAnalyzer {
 
                     if (module) {
                         imports.push(module);
-                        if (isLLMIdentifier(module)) {
+                        if (this.isLLMIdentifier(module)) {
                             const importedNames = names.split(',').map(n => {
                                 const parts = n.trim().split(/\s+as\s+/);
                                 return parts[parts.length - 1];
@@ -562,7 +567,7 @@ export class StaticAnalyzer {
                             const parts = n.trim().split(/\s+as\s+/);
                             const importName = parts[0];
                             imports.push(importName);
-                            if (isLLMIdentifier(importName)) {
+                            if (this.isLLMIdentifier(importName)) {
                                 return parts[parts.length - 1];
                             }
                             return null;
@@ -598,7 +603,7 @@ export class StaticAnalyzer {
                     const varName = assignMatch[2];
                     const value = assignMatch[3];
 
-                    if (isLLMIdentifier(value)) {
+                    if (this.isLLMIdentifier(value)) {
                         llmRelatedVariables.add(varName);
                         functionsWithLLMCode.add(currentFunction); // Mark function as using LLM
                         addLocation({
@@ -642,6 +647,93 @@ export class StaticAnalyzer {
                                 description,
                                 function: currentFunction
                             });
+                        }
+                    }
+                }
+
+                // Track AI service HTTP calls (non-LLM AI APIs)
+                // Look for requests.post/get with AI service domains or endpoints
+                const httpCallMatch = line.match(/requests\.(post|get)\s*\(/);
+                if (httpCallMatch) {
+                    // Check current line and next 5 lines for AI service patterns
+                    // This handles multi-line function calls like:
+                    //   requests.post(
+                    //       f"{API_BASE}/chat/completions",  <- URL on next line
+                    const windowLines = lines.slice(i, Math.min(i + 6, lines.length)).join('\n');
+
+                    const hasAIServiceDomain = aiServiceDomains.some(pattern => pattern.test(windowLines));
+                    const hasAIEndpoint = aiEndpointPatterns.some(pattern => pattern.test(windowLines));
+
+                    // Check if window uses any variable that contains an AI service URL
+                    // This catches patterns like: requests.post(f"{API_BASE}/chat/completions")
+                    // where API_BASE = "https://api.x.ai/v1" was defined earlier
+                    const usesAIServiceVar = Array.from(llmRelatedVariables).some(
+                        varName => windowLines.includes(varName)
+                    );
+
+                    if (hasAIServiceDomain || hasAIEndpoint || usesAIServiceVar) {
+                        functionsWithLLMCode.add(currentFunction); // Mark function as using AI service
+                        let description = `HTTP ${httpCallMatch[1]} to AI service`;
+
+                        // Try to identify the specific service from window content
+                        if (/elevenlabs/i.test(windowLines)) description = 'ElevenLabs API call';
+                        else if (/runwayml/i.test(windowLines)) description = 'Runway API call';
+                        else if (/sync\.so/i.test(windowLines)) description = 'Sync Labs API call';
+                        else if (/x\.ai/i.test(windowLines)) description = 'Grok/xAI API call';
+                        else if (/stability/i.test(windowLines)) description = 'Stability AI API call';
+                        else if (/d-id/i.test(windowLines)) description = 'D-ID API call';
+                        else if (/heygen/i.test(windowLines)) description = 'HeyGen API call';
+                        // If service not detected from window, check stored AI service variable URLs
+                        else if (usesAIServiceVar) {
+                            // Find which AI service variable is being used and get its URL
+                            for (const [varName, serviceUrl] of aiServiceVariables) {
+                                if (windowLines.includes(varName)) {
+                                    // Identify service from the stored URL
+                                    if (/x\.ai/i.test(serviceUrl)) description = 'Grok/xAI API call';
+                                    else if (/elevenlabs/i.test(serviceUrl)) description = 'ElevenLabs API call';
+                                    else if (/runwayml/i.test(serviceUrl)) description = 'Runway API call';
+                                    else if (/sync\.so/i.test(serviceUrl)) description = 'Sync Labs API call';
+                                    else if (/stability/i.test(serviceUrl)) description = 'Stability AI API call';
+                                    else if (/d-id/i.test(serviceUrl)) description = 'D-ID API call';
+                                    else if (/heygen/i.test(serviceUrl)) description = 'HeyGen API call';
+                                    else if (/leonardo/i.test(serviceUrl)) description = 'Leonardo.ai API call';
+                                    else if (/a2e/i.test(serviceUrl)) description = 'A2E API call';
+                                    break;
+                                }
+                            }
+                        }
+
+                        addLocation({
+                            line: lineNum,
+                            column: line.indexOf('requests.'),
+                            type: 'integration',
+                            description,
+                            function: currentFunction
+                        });
+                    }
+                }
+
+                // Also check for AI service URLs in variable assignments (e.g., BASE_URL = "https://api.elevenlabs.io")
+                if (assignMatch) {
+                    const varName = assignMatch[2];
+                    const value = assignMatch[3];
+                    const hasAIServiceDomain = aiServiceDomains.some(pattern => pattern.test(value));
+
+                    // Check if value directly contains an AI service domain
+                    if (hasAIServiceDomain) {
+                        llmRelatedVariables.add(varName); // Track as AI-related variable
+                        aiServiceVariables.set(varName, value); // Store URL for service identification
+                    }
+                    // Also check if value references another AI service variable (transitive)
+                    // e.g., TTS_ENDPOINT = f"{BASE_URL}/api/v1/..."
+                    else if (Array.from(aiServiceVariables.keys()).some(aiVar => value.includes(aiVar))) {
+                        llmRelatedVariables.add(varName);
+                        // Inherit the service URL from the referenced variable
+                        for (const [aiVar, serviceUrl] of aiServiceVariables) {
+                            if (value.includes(aiVar)) {
+                                aiServiceVariables.set(varName, serviceUrl);
+                                break;
+                            }
                         }
                     }
                 }

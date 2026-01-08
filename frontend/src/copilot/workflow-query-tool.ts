@@ -1,8 +1,5 @@
 import * as vscode from 'vscode';
 import { CacheManager } from '../cache';
-import { WorkflowGraph } from '../api';
-import { ViewState } from './types';
-import { filterToExpandedWorkflows } from './filter-utils';
 import { filterOrphanedNodes } from './graph-filter';
 import { TYPE_SYMBOLS, createNodeLink, formatWorkflow, formatLegend } from './compact-formatter';
 
@@ -17,8 +14,7 @@ interface WorkflowQueryInput {
  */
 class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> {
     constructor(
-        private cacheManager: CacheManager,
-        private getViewState: () => ViewState | null
+        private cacheManager: CacheManager
     ) {}
 
     async invoke(
@@ -42,26 +38,19 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
             const filteredGraph = filterOrphanedNodes(graph);
             console.log(`[workflow-query] Filtered to ${filteredGraph.nodes.length} nodes in LLM workflows`);
 
-            // Filter to only visible/expanded workflows from ViewState
-            const viewState = this.getViewState();
-            const visibleWorkflows = filterToExpandedWorkflows(
-                filteredGraph.workflows,
-                viewState?.expandedWorkflowIds || []
-            );
-            if (viewState?.expandedWorkflowIds && viewState.expandedWorkflowIds.length > 0) {
-                console.log(`[workflow-query] Filtered to ${visibleWorkflows.length} expanded workflows`);
-            }
+            // Use ALL workflows - don't filter by ViewState (LLM needs access to everything)
+            const allWorkflows = filteredGraph.workflows;
 
             // Find the workflow by name (case-insensitive partial match)
-            const workflow = visibleWorkflows.find(wf =>
+            const workflow = allWorkflows.find(wf =>
                 wf.name.toLowerCase().includes(input.workflowName.toLowerCase())
             );
 
             if (!workflow) {
-                const availableWorkflows = visibleWorkflows.map(wf => wf.name).join(', ');
+                const availableWorkflows = allWorkflows.map(wf => wf.name).join(', ');
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart(
-                        `Workflow "${input.workflowName}" not found in visible workflows.\n\nAvailable workflows: ${availableWorkflows}`
+                        `Workflow "${input.workflowName}" not found.\n\nAvailable workflows: ${availableWorkflows}`
                     )
                 ]);
             }
@@ -99,22 +88,6 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
                 parts.push(`Exit: ${exitLinks.join(', ')}`);
             }
 
-            // Critical path (if any)
-            const criticalPathEdges = workflowEdges.filter(e => e.isCriticalPath);
-            if (criticalPathEdges.length > 0) {
-                const criticalNodeIds = new Set<string>();
-                criticalPathEdges.forEach(e => {
-                    criticalNodeIds.add(e.source);
-                    criticalNodeIds.add(e.target);
-                });
-                const criticalLinks = Array.from(criticalNodeIds)
-                    .map(id => {
-                        const n = workflowNodes.find(n => n.id === id);
-                        return n ? createNodeLink(id, n.label) : id;
-                    });
-                parts.push(`Critical: ${criticalLinks.join(' → ')}`);
-            }
-
             parts.push('');
             parts.push(formatLegend());
 
@@ -132,8 +105,7 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
 }
 
 export function registerWorkflowQueryTool(
-    cacheManager: CacheManager,
-    getViewState: () => ViewState | null
+    cacheManager: CacheManager
 ): vscode.Disposable | null {
     try {
         if (!vscode.lm || typeof vscode.lm.registerTool !== 'function') {
@@ -141,7 +113,7 @@ export function registerWorkflowQueryTool(
             return null;
         }
 
-        const tool = new WorkflowQueryTool(cacheManager, getViewState);
+        const tool = new WorkflowQueryTool(cacheManager);
         const disposable = vscode.lm.registerTool('workflow-query', tool);
         console.log('✅ Registered workflow-query tool');
         return disposable;

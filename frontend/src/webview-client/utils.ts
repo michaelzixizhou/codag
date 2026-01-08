@@ -75,10 +75,12 @@ export function getNodeOrCollapsedGroup(nodeId: string, nodes: any[], workflowGr
 }
 
 /**
- * Helper function to count how many workflows contain a node
+ * Helper function to count how many rendered workflows (3+ nodes) contain a node
  */
 export function getNodeWorkflowCount(nodeId: string, workflowGroups: any[]): number {
-    return workflowGroups.filter((g: any) => g.nodes.includes(nodeId)).length;
+    return workflowGroups.filter((g: any) =>
+        g.nodes.includes(nodeId) && g.nodes.length >= 3
+    ).length;
 }
 
 /**
@@ -87,6 +89,36 @@ export function getNodeWorkflowCount(nodeId: string, workflowGroups: any[]): num
 export function isNodeInWorkflow(nodeId: string, workflowId: string, workflowGroups: any[]): boolean {
     const workflow = workflowGroups.find((g: any) => g.id === workflowId);
     return workflow ? workflow.nodes.includes(nodeId) : false;
+}
+
+/**
+ * Generate virtual ID for a shared node copy (nodeId__workflowId)
+ */
+export function getVirtualNodeId(nodeId: string, workflowId: string): string {
+    return `${nodeId}__${workflowId}`;
+}
+
+/**
+ * Extract original node ID from virtual ID
+ */
+export function getOriginalNodeId(virtualId: string): string {
+    const parts = virtualId.split('__');
+    return parts[0];
+}
+
+/**
+ * Extract workflow ID from virtual node ID
+ */
+export function getWorkflowIdFromVirtual(virtualId: string): string | null {
+    const parts = virtualId.split('__');
+    return parts.length > 1 ? parts[1] : null;
+}
+
+/**
+ * Check if a node ID is a virtual (duplicated) ID
+ */
+export function isVirtualNodeId(id: string): boolean {
+    return id.includes('__');
 }
 
 /**

@@ -1,7 +1,9 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from enum import Enum
 
+# Legacy models (kept for backwards compatibility)
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
@@ -16,12 +18,55 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+    user_id: Optional[str] = None  # UUID as string
 
 class User(BaseModel):
     email: str
     is_paid: bool = False
     requests_today: int = 0
     last_request_date: Optional[str] = None
+
+
+# OAuth Models
+class OAuthProvider(str, Enum):
+    GITHUB = "github"
+    GOOGLE = "google"
+
+class OAuthUser(BaseModel):
+    """User response model for OAuth-authenticated users."""
+    id: str
+    email: str
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    provider: OAuthProvider
+    is_paid: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+# Trial/Device Models
+class DeviceCheckRequest(BaseModel):
+    """Request to check/register a trial device."""
+    machine_id: str
+
+class DeviceCheckResponse(BaseModel):
+    """Response with trial status."""
+    machine_id: str
+    remaining_analyses: int
+    is_trial: bool = True
+    is_authenticated: bool = False
+
+class DeviceLinkRequest(BaseModel):
+    """Request to link a device to an authenticated user."""
+    machine_id: str
+
+class AuthStateResponse(BaseModel):
+    """Full auth state for frontend."""
+    is_authenticated: bool
+    is_trial: bool
+    remaining_analyses: int
+    user: Optional[OAuthUser] = None
 
 class LocationMetadata(BaseModel):
     line: int
@@ -53,9 +98,9 @@ class GraphNode(BaseModel):
     type: str
     source: Optional[SourceLocation] = None
     metadata: Optional[Dict[str, Any]] = None
+    model: Optional[str] = None  # For LLM nodes: the model name (e.g., "GPT-4", "Claude 3.5 Sonnet", "Gemini 2.5 Flash")
     isEntryPoint: Optional[bool] = False  # Node with no incoming edges
     isExitPoint: Optional[bool] = False   # Node with no outgoing edges
-    isCriticalPath: Optional[bool] = False  # Part of longest execution path
 
 class GraphEdge(BaseModel):
     source: str
@@ -65,13 +110,20 @@ class GraphEdge(BaseModel):
     dataType: Optional[str] = None  # Data type (e.g., "str", "dict", "AnalyzeRequest")
     description: Optional[str] = None  # What the variable represents
     sourceLocation: Optional[SourceLocation] = None  # Where variable is passed in code
-    isCriticalPath: Optional[bool] = False  # Part of longest execution path
+
+class ComponentMetadata(BaseModel):
+    """Sub-component within a workflow (e.g., error handling, tool selection)."""
+    id: str  # "comp_1", "comp_2", etc.
+    name: str  # Descriptive name (e.g., "Error Handling", "Tool Selection")
+    description: str  # 1-2 sentence description
+    nodeIds: List[str]  # Node IDs contained in this component
 
 class WorkflowMetadata(BaseModel):
     id: str  # "workflow_1", "workflow_2", etc.
     name: str  # Descriptive name (e.g., "Document Analysis Pipeline")
     description: str  # 1-2 sentence description of workflow purpose
     nodeIds: List[str]  # List of node IDs that belong to this workflow
+    components: List[ComponentMetadata] = []  # Sub-components within workflow
 
 class WorkflowGraph(BaseModel):
     nodes: List[GraphNode]

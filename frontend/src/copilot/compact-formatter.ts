@@ -286,3 +286,30 @@ export function linkifyResponse(text: string, graph: WorkflowGraph): string {
 function createCommandUri(nodeId: string, label: string): string {
   return `command:codag.focusNode?${encodeURIComponent(JSON.stringify([nodeId, label]))}`;
 }
+
+/**
+ * Post-process LLM response to convert workflow name references to clickable links
+ */
+export function linkifyWorkflows(
+  text: string,
+  workflows: Array<{ name: string; nodeIds: string[] }>
+): string {
+  let result = text;
+
+  // Sort by name length descending to match longer names first (avoid partial matches)
+  const sortedWorkflows = [...workflows].sort((a, b) => b.name.length - a.name.length);
+
+  for (const wf of sortedWorkflows) {
+    // Match workflow name with optional bold/italic markers, not already in a link
+    // Handles: "Name", **Name**, *Name*, `Name`
+    const escapedName = escapeRegex(wf.name);
+    const pattern = new RegExp(
+      `(?<!\\]\\()(?<!\\[)(?<prefix>[\\*\`]*)${escapedName}(?<suffix>[\\*\`]*)(?!\\]|\\()`,
+      'g'
+    );
+    result = result.replace(pattern, (match, prefix, suffix) => {
+      return `${prefix || ''}${createWorkflowLink(wf.name)}${suffix || ''}`;
+    });
+  }
+  return result;
+}

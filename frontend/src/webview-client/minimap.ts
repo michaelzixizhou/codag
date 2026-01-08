@@ -262,3 +262,20 @@ export function setupMinimapZoomListener(): void {
         });
     }
 }
+
+/**
+ * Pulse animation for newly added nodes on minimap
+ */
+export function pulseMinimapNodes(nodeIds: string[]): void {
+    nodeIds.forEach(id => {
+        d3.select(`.minimap-node[data-node-id="${id}"]`)
+            .transition().duration(200)
+            .attr('r', 6)
+            .transition().duration(400)
+            .attr('r', 3)
+            .transition().duration(200)
+            .attr('r', 6)
+            .transition().duration(400)
+            .attr('r', 3);
+    });
+}

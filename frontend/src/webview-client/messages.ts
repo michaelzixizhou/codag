@@ -6,13 +6,14 @@ import { openPanel } from './panel';
 import { layoutWorkflows } from './layout';
 import { renderGroups, renderCollapsedGroups } from './groups';
 import { renderEdges } from './edges';
-import { renderNodes } from './nodes';
+import { renderNodes, pulseNodes } from './nodes';
 import { dragstarted, dragged, dragended } from './drag';
-import { renderMinimap } from './minimap';
+import { renderMinimap, pulseMinimapNodes } from './minimap';
 import { fitToScreen } from './controls';
 import { updateGroupVisibility } from './visibility';
 import { populateDirectory, focusOnWorkflow } from './directory';
 import { getFilePicker } from './file-picker';
+import { setAuthState, openAuthPanel, AuthState } from './auth';
 
 declare const d3: any;
 
@@ -30,14 +31,14 @@ export function setupMessageHandler(): void {
         switch (message.command) {
             case 'showLoading':
                 indicator.className = 'loading-indicator';
-                iconSpan.textContent = '⟳';
+                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
                 textSpan.textContent = message.text || 'Loading...';
                 indicator.style.display = 'block';
                 break;
 
             case 'updateProgress':
                 indicator.className = 'loading-indicator';
-                iconSpan.textContent = '⟳';
+                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
                 indicator.style.display = 'block';
 
                 const progressContainer = indicator.querySelector('.progress-bar-container') as HTMLElement;
@@ -46,7 +47,7 @@ export function setupMessageHandler(): void {
                     progressContainer.style.display = 'block';
                     const percent = (message.current / message.total) * 100;
                     progressFill.style.width = `${percent}%`;
-                    textSpan.textContent = `Analyzing workflows... ${Math.round(percent)}%`;
+                    textSpan.textContent = `Analyzing batch ${message.current}/${message.total}...`;
                 }
                 break;
 
@@ -66,12 +67,23 @@ export function setupMessageHandler(): void {
 
             case 'analysisStarted':
                 indicator.className = 'loading-indicator';
-                iconSpan.textContent = '⟳';
+                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
                 textSpan.textContent = 'Analyzing workflow...';
                 indicator.style.display = 'block';
+                // Initialize progress bar at 0%
+                const startProgressContainer = indicator.querySelector('.progress-bar-container') as HTMLElement;
+                const startProgressFill = indicator.querySelector('.progress-bar-fill') as HTMLElement;
+                if (startProgressContainer && startProgressFill) {
+                    startProgressContainer.style.display = 'block';
+                    startProgressFill.style.width = '0%';
+                }
                 break;
 
             case 'analysisComplete':
+                // Hide progress bar
+                const completeProgressBar = indicator.querySelector('.progress-bar-container') as HTMLElement;
+                if (completeProgressBar) completeProgressBar.style.display = 'none';
+
                 if (message.success) {
                     indicator.className = 'loading-indicator success';
                     iconSpan.textContent = '✓';
@@ -114,7 +126,7 @@ export function setupMessageHandler(): void {
                         break;
                     }
 
-                    // Show loading indicator with update summary
+                    // Show loading indicator with update summary (don't hide progress bar)
                     const addedCount = diff.nodes.added.length;
                     const removedCount = diff.nodes.removed.length;
                     const parts = [];
@@ -124,7 +136,11 @@ export function setupMessageHandler(): void {
                     indicator.className = 'loading-indicator';
                     indicator.classList.remove('hidden');
                     iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
-                    textSpan.textContent = `Updating: ${parts.join(', ')} nodes`;
+                    // Only update text if progress bar is not visible (batch analysis in progress)
+                    const updateProgressBar = indicator.querySelector('.progress-bar-container') as HTMLElement;
+                    if (!updateProgressBar || updateProgressBar.style.display === 'none') {
+                        textSpan.textContent = `Updating: ${parts.join(', ')} nodes`;
+                    }
                     indicator.style.display = 'block';
 
                     // Preserve collapsed states from old groups
@@ -173,6 +189,15 @@ export function setupMessageHandler(): void {
 
                     // Apply group visibility
                     updateGroupVisibility();
+
+                    // Pulse newly added nodes
+                    if (diff.nodes.added.length > 0) {
+                        const newNodeIds = diff.nodes.added.map((n: any) => n.id);
+                        setTimeout(() => {
+                            pulseNodes(newNodeIds);
+                            pulseMinimapNodes(newNodeIds);
+                        }, 100); // Small delay to ensure DOM is ready
+                    }
 
                     // Update header stats
                     updateSnapshotStats(state.workflowGroups, state.currentGraphData);
@@ -246,6 +271,35 @@ export function setupMessageHandler(): void {
                 if (message.llmFiles) {
                     getFilePicker().updateLLMFiles(message.llmFiles);
                 }
+                break;
+
+            case 'updateAuthState':
+                // Update auth state (trial tag, sign-up button)
+                console.log('[webview-msg] Received updateAuthState:', message.authState);
+                if (message.authState) {
+                    setAuthState(message.authState as AuthState);
+                }
+                break;
+
+            case 'showAuthPanel':
+                // Show the auth panel (when trial exhausted)
+                openAuthPanel();
+                break;
+
+            case 'authError':
+                // Show auth error in loading indicator
+                indicator.className = 'loading-indicator error';
+                iconSpan.textContent = '✕';
+                textSpan.textContent = message.error || 'Authentication failed';
+                indicator.style.display = 'block';
+                setTimeout(() => {
+                    indicator.style.display = 'none';
+                }, 4000);
+                break;
+
+            case 'closeFilePicker':
+                // Close file picker immediately (no animation)
+                getFilePicker().close(false);
                 break;
 
             case 'initGraph':

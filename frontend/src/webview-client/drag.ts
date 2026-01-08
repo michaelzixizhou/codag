@@ -4,6 +4,7 @@ import { snapToGrid } from './utils';
 import { openPanel, closePanel } from './panel';
 import { renderMinimap } from './minimap';
 import { updateEdgePaths } from './edges';
+import { updateSharedArrows } from './nodes';
 import { DRAG_THRESHOLD } from './constants';
 
 declare const d3: any;
@@ -31,6 +32,11 @@ export function dragged(event: any, d: any): void {
 
     // Update connected edges
     updateEdgePaths();
+
+    // Update shared arrows if dragging a shared node
+    if (d._originalId) {
+        updateSharedArrows(d);
+    }
 
     // Update minimap
     updateMinimapNodePosition(d);

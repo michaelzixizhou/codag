@@ -191,9 +191,6 @@ export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToo
         parts.push(`### ${wf.name}`);
         parts.push(`- Entry points: ${wf.entryPoints.join(', ')}`);
         parts.push(`- Exit points: ${wf.exitPoints.join(', ')}`);
-        if (wf.criticalPath.length > 0) {
-          parts.push(`- Critical path nodes: ${wf.criticalPath.join(', ')}`);
-        }
         parts.push('');
       });
     }

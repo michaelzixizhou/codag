@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
 import { CacheManager } from '../cache';
 import { WorkflowGraph } from '../api';
-import { ViewState } from './types';
-import { filterGraphToExpanded } from './filter-utils';
 import { filterOrphanedNodes } from './graph-filter';
 import { TYPE_SYMBOLS, createNodeLink } from './compact-formatter';
 
@@ -20,8 +18,7 @@ interface WorkflowNavigateInput {
  */
 class WorkflowNavigateTool implements vscode.LanguageModelTool<WorkflowNavigateInput> {
     constructor(
-        private cacheManager: CacheManager,
-        private getViewState: () => ViewState | null
+        private cacheManager: CacheManager
     ) {}
 
     async invoke(
@@ -42,18 +39,9 @@ class WorkflowNavigateTool implements vscode.LanguageModelTool<WorkflowNavigateI
             }
 
             // Filter out orphaned nodes and their edges (match webview rendering)
-            const graphWithoutOrphans = filterOrphanedNodes(graph);
-            console.log(`[workflow-navigate] Filtered to ${graphWithoutOrphans.nodes.length} nodes in LLM workflows`);
-
-            // Filter to only nodes in visible/expanded workflows
-            const viewState = this.getViewState();
-            const filteredGraph = filterGraphToExpanded(
-                graphWithoutOrphans,
-                viewState?.expandedWorkflowIds || []
-            );
-            if (viewState?.expandedWorkflowIds && viewState.expandedWorkflowIds.length > 0) {
-                console.log(`[workflow-navigate] Filtered to ${filteredGraph.nodes.length} nodes in ${filteredGraph.workflows.length} expanded workflows`);
-            }
+            // Use ALL nodes - don't filter by ViewState (LLM needs access to everything)
+            const filteredGraph = filterOrphanedNodes(graph);
+            console.log(`[workflow-navigate] Filtered to ${filteredGraph.nodes.length} nodes in LLM workflows`);
 
             // Helper to create compact node link with symbol
             const makeLink = (nodeId: string): string => {
@@ -266,8 +254,7 @@ class WorkflowNavigateTool implements vscode.LanguageModelTool<WorkflowNavigateI
 }
 
 export function registerWorkflowNavigateTool(
-    cacheManager: CacheManager,
-    getViewState: () => ViewState | null
+    cacheManager: CacheManager
 ): vscode.Disposable | null {
     try {
         if (!vscode.lm || typeof vscode.lm.registerTool !== 'function') {
@@ -275,7 +262,7 @@ export function registerWorkflowNavigateTool(
             return null;
         }
 
-        const tool = new WorkflowNavigateTool(cacheManager, getViewState);
+        const tool = new WorkflowNavigateTool(cacheManager);
         const disposable = vscode.lm.registerTool('workflow-navigate', tool);
         console.log('✅ Registered workflow-navigate tool');
         return disposable;

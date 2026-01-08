@@ -26,7 +26,7 @@ make setup  # Install all dependencies
 make run    # Start backend + launch extension
 ```
 
-Requirements: Python 3.8+, Node.js 16+, VSCode
+Requirements: Python 3.8+, Node.js 16+, VSCode 1.95+
 
 ## Setup
 
@@ -41,7 +41,22 @@ pip install -r requirements.txt
 
 Create `backend/.env`:
 ```bash
-GEMINI_API_KEY=your-key-here
+SECRET_KEY=your-secret-key
+GEMINI_API_KEY=your-gemini-key
+
+# PostgreSQL (for auth & trial tracking)
+DATABASE_URL=postgresql+asyncpg://localhost/codag
+
+# OAuth (optional - for sign-up flow)
+GITHUB_CLIENT_ID=xxx
+GITHUB_CLIENT_SECRET=xxx
+GOOGLE_CLIENT_ID=xxx
+GOOGLE_CLIENT_SECRET=xxx
+```
+
+Create the database:
+```bash
+createdb codag
 ```
 
 ### 2. Frontend Setup
@@ -127,7 +142,10 @@ The system identifies 8 node types:
 - **Critical path validation**: Enforces singular linear path from entry to exit
 - **Workflow connectivity**: All nodes in workflow must be reachable via edges
 
-**Note**: Auth is currently disabled (TODOs exist in code for re-enabling).
+**Authentication:**
+- **Trial Mode**: New users get 5 analyses/day tracked by VSCode `machineId`
+- **OAuth**: GitHub and Google sign-in for unlimited access
+- **URI Callback**: OAuth flow redirects via `vscode://codag/auth/callback`
 
 ## Development Commands
 
@@ -181,6 +199,137 @@ git revert 2750e0d  # Or cherry-pick specific export functionality
 ```
 
 The export feature will be re-implemented with improved UX in a future update.
+
+## Contributing
+
+### Branch Strategy
+
+- Create feature branches from `main`: `feature/your-feature-name`
+- Open PRs against `main`
+- Squash merge preferred
+
+### Code Style
+
+**TypeScript (Frontend):**
+- ESLint + Prettier (run `npm run lint`)
+- 4-space indentation
+- Single quotes for strings
+
+**Python (Backend):**
+- Black formatter (run `black .`)
+- Type hints encouraged
+- 4-space indentation
+
+### Pull Request Process
+
+1. Ensure `npm run compile` passes with no errors
+2. Test the extension manually (`make run`)
+3. Update CLAUDE.md if adding new patterns or conventions
+4. Keep PRs focused—one feature or fix per PR
+
+---
+
+## Development
+
+### Troubleshooting
+
+**Backend won't start:**
+```bash
+# Check if port 8000 is in use
+lsof -i :8000
+# Kill existing process if needed
+make stop
+```
+
+**Database connection errors:**
+```bash
+# Ensure PostgreSQL is running
+brew services start postgresql  # macOS
+# Create database if missing
+createdb codag
+```
+
+**OAuth not working:**
+- Verify `.env` has valid `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+- Check callback URL matches: `http://localhost:8000/auth/github/callback`
+
+**Extension not loading:**
+- Run `npm run compile` in `frontend/`
+- Check VSCode Output panel → "Codag" for errors
+
+### Debug Logging
+
+- Backend logs: `backend/backend.log`
+- Backend PID: `backend/backend.pid`
+- Extension logs: VSCode Output panel → "Codag"
+
+### Hot Reload
+
+Backend doesn't hot-reload. After Python changes:
+```bash
+make stop && make run
+```
+
+Frontend TypeScript auto-compiles with `npm run watch`.
+
+---
+
+## API Reference
+
+### POST `/analyze`
+
+Analyzes code for LLM workflow patterns.
+
+**Request:**
+```json
+{
+  "code": "# File: path/to/file.py\nimport openai...",
+  "metadata": [
+    {
+      "file": "path/to/file.py",
+      "locations": [{"line": 10, "type": "llm_call", "function": "main"}]
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "nodes": [...],
+  "edges": [...],
+  "llms_detected": ["openai"],
+  "workflows": [{"id": "...", "name": "...", "nodeIds": [...]}]
+}
+```
+
+**Headers:**
+- `X-Device-ID`: VSCode machine ID (for trial tracking)
+- `Authorization`: `Bearer <token>` (for authenticated users)
+
+### GET `/auth/device/check`
+
+Check trial status for a device.
+
+**Headers:** `X-Device-ID`
+
+**Response:**
+```json
+{
+  "machine_id": "...",
+  "remaining_analyses": 5,
+  "is_trial": true,
+  "is_authenticated": false
+}
+```
+
+### OAuth Endpoints
+
+- `GET /auth/github` - Initiate GitHub OAuth
+- `GET /auth/google` - Initiate Google OAuth
+- Callbacks redirect to `vscode://codag.codag/auth/callback?token=...`
+
+---
 
 ## Future Enhancements
 

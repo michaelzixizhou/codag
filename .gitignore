@@ -41,11 +41,12 @@ Thumbs.db
 
 # IDEs
 .vscode/
+.vscode-dev/
 .idea/
 *.swp
 *.swo
 *~
 
 # Cache directories
-.vibecode-cache/
+.codag-cache/
 .cache/

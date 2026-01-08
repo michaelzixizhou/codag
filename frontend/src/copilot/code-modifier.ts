@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 /**
- * Handles code modifications requested via @workflow chat participant
+ * Handles code modifications requested via @codag chat participant
  */
 export class CodeModifier {
     /**

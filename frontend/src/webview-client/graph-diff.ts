@@ -78,13 +78,11 @@ function nodeChanged(oldNode: WorkflowNode, newNode: WorkflowNode): boolean {
            oldNode.description !== newNode.description ||
            oldNode.isEntryPoint !== newNode.isEntryPoint ||
            oldNode.isExitPoint !== newNode.isExitPoint ||
-           oldNode.isCriticalPath !== newNode.isCriticalPath ||
            JSON.stringify(oldNode.source) !== JSON.stringify(newNode.source);
 }
 
 function edgeChanged(oldEdge: WorkflowEdge, newEdge: WorkflowEdge): boolean {
-    return oldEdge.label !== newEdge.label ||
-           oldEdge.isCriticalPath !== newEdge.isCriticalPath;
+    return oldEdge.label !== newEdge.label;
 }
 
 function workflowChanged(oldWorkflow: Workflow, newWorkflow: Workflow): boolean {

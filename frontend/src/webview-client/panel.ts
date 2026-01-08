@@ -24,22 +24,51 @@ export function openPanel(nodeData: any): void {
 
     title.textContent = nodeData.label;
 
-    // Set workflow name
+    // Check if node is a shared copy (has _originalId from node duplication)
+    const isSharedCopy = nodeData._originalId != null;
+    const originalId = isSharedCopy ? nodeData._originalId : nodeData.id;
+
+    // Set workflow name(s)
     const workflowEl = document.getElementById('panelWorkflow');
     if (workflowEl) {
-        const workflow = workflowGroups?.find(
-            (g: any) => g.nodes.includes(nodeData.id)
-        );
-        if (workflow) {
-            workflowEl.textContent = workflow.name;
+        if (isSharedCopy && nodeData._workflowId) {
+            // For shared copy, show which workflow this copy belongs to, plus others
+            const thisWorkflow = workflowGroups?.find((g: any) => g.id === nodeData._workflowId);
+            const otherWorkflows = workflowGroups?.filter(
+                (g: any) => g.nodes.includes(originalId) && g.id !== nodeData._workflowId
+            ) || [];
+
+            let workflowHtml = thisWorkflow ? `<strong>${thisWorkflow.name}</strong> (this copy)` : '';
+            if (otherWorkflows.length > 0) {
+                workflowHtml += '<br>' + otherWorkflows.map((w: any) => w.name).join('<br>');
+            }
+            workflowEl.innerHTML = workflowHtml;
             workflowEl.style.display = 'block';
         } else {
-            workflowEl.style.display = 'none';
+            // For non-shared nodes, show the workflow
+            const workflows = workflowGroups?.filter(
+                (g: any) => g.nodes.includes(nodeData.id)
+            ) || [];
+            if (workflows.length > 0) {
+                workflowEl.innerHTML = workflows.map((w: any) => w.name).join('<br>');
+                workflowEl.style.display = 'block';
+            } else {
+                workflowEl.style.display = 'none';
+            }
         }
     }
 
+    // Add type badge with optional SHARED tag
     type.textContent = nodeData.type;
     type.className = `type-badge ${nodeData.type}`;
+
+    // Clean up any existing shared tag first
+    const existingTag = type.parentElement?.querySelector('.shared-tag');
+    if (existingTag) existingTag.remove();
+
+    if (isSharedCopy) {
+        type.insertAdjacentHTML('afterend', '<span class="shared-tag" style="display: inline-block; margin-left: 8px; padding: 4px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; background: rgba(255,255,255,0.1); color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.5px;">Shared</span>');
+    }
 
     if (nodeData.description) {
         description.textContent = nodeData.description;
@@ -65,9 +94,15 @@ export function openPanel(nodeData: any): void {
         sourceSection.style.display = 'none';
     }
 
-    // Find incoming edges
+    // Find incoming edges (use original ID for lookup since edges use original IDs)
+    const nodeWorkflowId = nodeData._workflowId;
     const incomingEdges = currentGraphData.edges.filter((e: any) => {
-        if (e.target !== nodeData.id) return false;
+        if (e.target !== originalId) return false;
+        // For shared nodes, only show edges within this workflow
+        if (nodeWorkflowId) {
+            const workflow = workflowGroups?.find((g: any) => g.id === nodeWorkflowId);
+            if (workflow && !workflow.nodes.includes(e.source)) return false;
+        }
         return currentGraphData.nodes.some((n: any) => n.id === e.source);
     });
 
@@ -104,9 +139,14 @@ export function openPanel(nodeData: any): void {
         incomingSection.style.display = 'none';
     }
 
-    // Find outgoing edges
+    // Find outgoing edges (use original ID for lookup since edges use original IDs)
     const outgoingEdges = currentGraphData.edges.filter((e: any) => {
-        if (e.source !== nodeData.id) return false;
+        if (e.source !== originalId) return false;
+        // For shared nodes, only show edges within this workflow
+        if (nodeWorkflowId) {
+            const workflow = workflowGroups?.find((g: any) => g.id === nodeWorkflowId);
+            if (workflow && !workflow.nodes.includes(e.target)) return false;
+        }
         return currentGraphData.nodes.some((n: any) => n.id === e.target);
     });
 

@@ -18,7 +18,7 @@ class FileReaderTool implements vscode.LanguageModelTool<FileReaderInput> {
         const input = options.input;
 
         try {
-            console.log(`[@workflow-file-reader] Reading file: ${input.filePath}`);
+            console.log(`[@codag-file-reader] Reading file: ${input.filePath}`);
 
             const uri = vscode.Uri.file(input.filePath);
             const document = await vscode.workspace.openTextDocument(uri);
@@ -44,7 +44,7 @@ class FileReaderTool implements vscode.LanguageModelTool<FileReaderInput> {
                 new vscode.LanguageModelTextPart(`File: ${input.filePath}\n\n${content}`)
             ]);
         } catch (error: any) {
-            console.error(`[@workflow-file-reader] Error reading file:`, error);
+            console.error(`[@codag-file-reader] Error reading file:`, error);
             return new vscode.LanguageModelToolResult([
                 new vscode.LanguageModelTextPart(`Error reading file ${input.filePath}: ${error.message}`)
             ]);

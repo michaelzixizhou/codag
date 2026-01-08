@@ -3,8 +3,16 @@ import * as state from './state';
 import { generateEdgePath, getNodeOrCollapsedGroup } from './utils';
 import { getNodeDimensions, areNodesInSameCollapsedGroup } from './helpers';
 import { populateDirectory } from './directory';
+import { getExpandedNodes, renderEdges } from './edges';
+import { layoutWorkflows } from './layout';
+import { renderNodes } from './nodes';
+import { renderGroups, renderCollapsedGroups } from './groups';
+import { renderCollapsedComponents } from './components';
+import { dragstarted, dragged, dragended } from './drag';
+import { renderMinimap } from './minimap';
 
 declare const d3: any;
+declare const dagre: any;
 
 export function updateGroupVisibility(): void {
     const {
@@ -36,7 +44,12 @@ export function updateGroupVisibility(): void {
 
     // Hide nodes that are in collapsed groups
     node.style('display', (d: any) => {
-        const inCollapsedGroup = workflowGroups.some((g: any) => g.collapsed && g.nodes.includes(d.id));
+        const nodeId = d._originalId || d.id;
+        const nodeWorkflowId = d._workflowId;
+        const inCollapsedGroup = workflowGroups.some((g: any) =>
+            g.collapsed && g.nodes.includes(nodeId) &&
+            (nodeWorkflowId ? g.id === nodeWorkflowId : true)
+        );
         return inCollapsedGroup ? 'none' : 'block';
     });
 
@@ -44,7 +57,13 @@ export function updateGroupVisibility(): void {
     linkGroup.style('display', 'block');
 
     // Update edge paths to route to collapsed groups
-    const getNode = (nodeId: string) => getNodeOrCollapsedGroup(nodeId, currentGraphData.nodes, workflowGroups);
+    const expandedNodes = getExpandedNodes();
+    const getNode = (nodeId: string) => {
+        // Check expanded nodes first (for virtual IDs)
+        const expanded = expandedNodes.find((n: any) => n.id === nodeId);
+        if (expanded) return expanded;
+        return getNodeOrCollapsedGroup(nodeId, currentGraphData.nodes, workflowGroups);
+    };
 
     link.attr('d', function(this: SVGPathElement, l: any) {
         const sourceNode = getNode(l.source);
@@ -97,5 +116,41 @@ export function updateGroupVisibility(): void {
     });
 
     // Update workflow directory
+    populateDirectory();
+}
+
+/**
+ * Update visibility when components are expanded/collapsed.
+ * This requires a full re-layout since component expansion changes node positions.
+ */
+export function updateComponentVisibility(): void {
+    const { g, svg } = state;
+
+    // Remove existing rendered elements (except SVG defs)
+    g.selectAll('.groups').remove();
+    g.selectAll('.edge-paths-container').remove();
+    g.selectAll('.edge-labels-container').remove();
+    g.selectAll('.nodes-container').remove();
+    g.selectAll('.collapsed-groups').remove();
+    g.selectAll('.collapsed-components').remove();
+    g.selectAll('.shared-arrows-container').remove();
+
+    // Get defs element for patterns
+    const defs = svg.select('defs');
+
+    // Re-layout with new component state
+    layoutWorkflows(defs);
+
+    // Re-render everything
+    renderGroups(updateGroupVisibility);
+    renderEdges();
+    renderNodes(dragstarted, dragged, dragended);
+    renderCollapsedGroups(updateGroupVisibility);
+    renderCollapsedComponents(updateComponentVisibility);
+
+    // Update minimap
+    renderMinimap();
+
+    // Update directory
     populateDirectory();
 }

@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
 import { CacheManager } from '../cache';
 import { WorkflowGraph } from '../api';
-import { ViewState } from './types';
-import { filterToExpandedNodes, filterToExpandedWorkflows } from './filter-utils';
 import { filterOrphanedNodes } from './graph-filter';
 import { TYPE_SYMBOLS, createNodeLink, formatSharedNodes } from './compact-formatter';
 
@@ -21,8 +19,7 @@ interface NodeQueryInput {
  */
 class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
     constructor(
-        private cacheManager: CacheManager,
-        private getViewState: () => ViewState | null
+        private cacheManager: CacheManager
     ) {}
 
     async invoke(
@@ -46,20 +43,8 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
             const filteredGraph = filterOrphanedNodes(graph);
             console.log(`[node-query] Filtered to ${filteredGraph.nodes.length} nodes in LLM workflows`);
 
-            // Filter to only nodes in visible/expanded workflows
-            const viewState = this.getViewState();
-            let nodes = filterToExpandedNodes(
-                filteredGraph.nodes,
-                filteredGraph.workflows,
-                viewState?.expandedWorkflowIds || []
-            );
-            if (viewState?.expandedWorkflowIds && viewState.expandedWorkflowIds.length > 0) {
-                const visibleWorkflows = filterToExpandedWorkflows(
-                    filteredGraph.workflows,
-                    viewState.expandedWorkflowIds
-                );
-                console.log(`[node-query] Filtered to ${nodes.length} nodes in ${visibleWorkflows.length} expanded workflows`);
-            }
+            // Use ALL nodes - don't filter by ViewState (LLM needs access to everything)
+            let nodes = filteredGraph.nodes;
 
             // Filter by node IDs
             if (input.nodeIds && input.nodeIds.length > 0) {
@@ -189,8 +174,7 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
 }
 
 export function registerNodeQueryTool(
-    cacheManager: CacheManager,
-    getViewState: () => ViewState | null
+    cacheManager: CacheManager
 ): vscode.Disposable | null {
     try {
         if (!vscode.lm || typeof vscode.lm.registerTool !== 'function') {
@@ -198,7 +182,7 @@ export function registerNodeQueryTool(
             return null;
         }
 
-        const tool = new NodeQueryTool(cacheManager, getViewState);
+        const tool = new NodeQueryTool(cacheManager);
         const disposable = vscode.lm.registerTool('node-query', tool);
         console.log('✅ Registered node-query tool');
         return disposable;

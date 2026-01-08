@@ -4,6 +4,7 @@ import * as path from 'path';
 import { WorkflowGraph } from './api';
 import { ViewState } from './copilot/types';
 import { FileTreeNode } from './file-picker';
+import { AuthState, OAuthProvider } from './auth';
 
 export interface LoadingOptions {
     loading?: boolean;
@@ -18,8 +19,45 @@ export class WebviewManager {
         lastUpdated: Date.now()
     };
     private filePickerResolver: ((paths: string[] | null) => void) | null = null;
+    private currentAuthState: AuthState | null = null;  // Track current auth state for re-sending after HTML replacement
+    private pendingMessages: any[] = [];
+    private webviewReady = false;
 
     constructor(private context: vscode.ExtensionContext) {}
+
+    /**
+     * Post message to webview, queuing if not ready yet
+     */
+    private postMessage(message: any) {
+        if (this.panel) {
+            if (this.webviewReady) {
+                this.panel.webview.postMessage(message);
+            } else {
+                this.pendingMessages.push(message);
+            }
+        }
+    }
+
+    /**
+     * Flush pending messages and mark webview as ready
+     */
+    private onWebviewReady() {
+        console.log('[webview] onWebviewReady: flushing', this.pendingMessages.length, 'messages');
+        this.webviewReady = true;
+        this.pendingMessages.forEach(msg => {
+            console.log('[webview] Sending queued message:', msg.command);
+            this.panel?.webview.postMessage(msg);
+        });
+        this.pendingMessages = [];
+    }
+
+    /**
+     * Reset ready state when HTML is replaced
+     */
+    private resetWebviewState() {
+        this.webviewReady = false;
+        this.pendingMessages = [];
+    }
 
     private getIconPath() {
         return {
@@ -41,28 +79,22 @@ export class WebviewManager {
     }
 
     notifyAnalysisStarted() {
-        if (this.panel) {
-            this.panel.webview.postMessage({ command: 'analysisStarted' });
-        }
+        this.postMessage({ command: 'analysisStarted' });
     }
 
     notifyAnalysisComplete(success: boolean, error?: string) {
-        if (this.panel) {
-            this.panel.webview.postMessage({
-                command: 'analysisComplete',
-                success,
-                error
-            });
-        }
+        this.postMessage({
+            command: 'analysisComplete',
+            success,
+            error
+        });
     }
 
     notifyWarning(message: string) {
-        if (this.panel) {
-            this.panel.webview.postMessage({
-                command: 'warning',
-                message
-            });
-        }
+        this.postMessage({
+            command: 'warning',
+            message
+        });
     }
 
     private setupMessageHandlers() {
@@ -72,16 +104,34 @@ export class WebviewManager {
             async (message) => {
                 if (message.command === 'openFile') {
                     try {
-                        const filePath = message.file;
+                        let filePath = message.file;
 
                         if (!filePath || typeof filePath !== 'string') {
                             vscode.window.showErrorMessage(`Invalid file path: ${filePath}`);
                             return;
                         }
 
+                        // Handle relative paths - try to find the file in workspace
                         if (!filePath.startsWith('/')) {
-                            vscode.window.showErrorMessage(`File path must be absolute: ${filePath}`);
-                            return;
+                            const workspaceFolders = vscode.workspace.workspaceFolders;
+                            if (workspaceFolders && workspaceFolders.length > 0) {
+                                // Search for file matching the relative path/filename
+                                const searchPattern = filePath.includes('/') ? `**/${filePath}` : `**/${filePath}`;
+                                const matches = await vscode.workspace.findFiles(searchPattern, '**/node_modules/**', 5);
+                                if (matches.length === 1) {
+                                    filePath = matches[0].fsPath;
+                                } else if (matches.length > 1) {
+                                    // Multiple matches - try to find exact match
+                                    const exactMatch = matches.find(m => m.fsPath.endsWith(filePath));
+                                    filePath = exactMatch ? exactMatch.fsPath : matches[0].fsPath;
+                                } else {
+                                    vscode.window.showErrorMessage(`Could not find file: ${filePath}`);
+                                    return;
+                                }
+                            } else {
+                                vscode.window.showErrorMessage(`File path must be absolute: ${filePath}`);
+                                return;
+                            }
                         }
 
                         const fileUri = vscode.Uri.file(filePath);
@@ -127,13 +177,71 @@ export class WebviewManager {
                     // Just show the file picker on the existing graph
                     vscode.commands.executeCommand('codag.showFilePicker');
                 } else if (message.command === 'clearCacheAndReanalyze') {
-                    // Clear cache and trigger full reanalysis
-                    vscode.commands.executeCommand('codag.refresh');
+                    // Clear cache for selected files and reanalyze them
+                    vscode.commands.executeCommand('codag.clearCacheAndReanalyze', message.paths);
+                } else if (message.command === 'startOAuth') {
+                    // Start OAuth flow for specified provider
+                    const provider = message.provider as OAuthProvider;
+                    vscode.commands.executeCommand('codag.startOAuth', provider);
+                } else if (message.command === 'logout') {
+                    vscode.commands.executeCommand('codag.logout');
+                } else if (message.command === 'webviewReady') {
+                    // Webview is ready to receive messages
+                    this.onWebviewReady();
                 }
             },
             undefined,
             this.context.subscriptions
         );
+    }
+
+    /**
+     * Update auth state in webview (trial tag, sign-up button visibility)
+     */
+    updateAuthState(state: AuthState) {
+        console.log('[webview] updateAuthState called: panel=', !!this.panel, 'isAuthenticated=', state.isAuthenticated, 'hasUser=', !!state.user);
+        // Always track current auth state so we can re-send after HTML replacement
+        this.currentAuthState = state;
+        if (this.panel) {
+            this.postMessage({
+                command: 'updateAuthState',
+                authState: state
+            });
+        }
+    }
+
+    /**
+     * Send current auth state to webview (called after HTML replacement)
+     */
+    private sendCurrentAuthState() {
+        if (this.currentAuthState && this.panel) {
+            console.log('[webview] Sending auth state after HTML replacement:', this.currentAuthState.isAuthenticated);
+            this.postMessage({
+                command: 'updateAuthState',
+                authState: this.currentAuthState
+            });
+        }
+    }
+
+    /**
+     * Show the auth panel (called when trial is exhausted)
+     */
+    showAuthPanel() {
+        this.postMessage({ command: 'showAuthPanel' });
+    }
+
+    /**
+     * Show auth error in the webview notification
+     */
+    showAuthError(error: string) {
+        this.postMessage({ command: 'authError', error });
+    }
+
+    /**
+     * Close the file picker immediately (no animation)
+     */
+    closeFilePicker() {
+        this.postMessage({ command: 'closeFilePicker' });
     }
 
     /**
@@ -169,14 +277,18 @@ export class WebviewManager {
 
             this.setupMessageHandlers();
 
-            // Show empty graph initially
+            // Show empty graph initially - reset ready state since HTML is replaced
+            this.resetWebviewState();
             this.panel.webview.html = this.getHtml({ nodes: [], edges: [], llms_detected: [], workflows: [] });
+
+            // Send queued auth state
+            this.sendCurrentAuthState();
         } else {
             this.panel.reveal();
         }
 
-        // Send file picker message to webview
-        this.panel.webview.postMessage({
+        // Send file picker message to webview (queued until ready)
+        this.postMessage({
             command: 'showFilePicker',
             tree,
             totalFiles
@@ -192,7 +304,7 @@ export class WebviewManager {
      * Update file picker with LLM detection results (called after picker is shown)
      */
     updateFilePickerLLM(llmFilePaths: string[]) {
-        this.panel?.webview.postMessage({
+        this.postMessage({
             command: 'updateFilePickerLLM',
             llmFiles: llmFilePaths
         });
@@ -222,74 +334,65 @@ export class WebviewManager {
 
             this.setupMessageHandlers();
 
+            // Reset ready state since HTML is replaced
+            this.resetWebviewState();
             this.panel.webview.html = this.getHtml({ nodes: [], edges: [], llms_detected: [], workflows: [] });
+
+            // Send queued auth state
+            this.sendCurrentAuthState();
         } else {
             this.panel.reveal();
         }
 
-        this.panel.webview.postMessage({ command: 'showLoading', text: message });
+        this.postMessage({ command: 'showLoading', text: message });
     }
 
     updateProgress(current: number, total: number) {
-        if (this.panel) {
-            this.panel.webview.postMessage({ command: 'updateProgress', current, total });
-        }
+        this.postMessage({ command: 'updateProgress', current, total });
     }
 
     updateGraph(graph: WorkflowGraph) {
-        if (this.panel) {
-            this.panel.webview.postMessage({
-                command: 'updateGraph',
-                graph,
-                preserveState: true
-            });
-        }
+        this.postMessage({
+            command: 'updateGraph',
+            graph,
+            preserveState: true
+        });
     }
 
     /**
      * Initialize graph after file picker closes (for cached data)
      */
     initGraph(graph: WorkflowGraph) {
-        if (this.panel) {
-            this.panel.webview.postMessage({
-                command: 'initGraph',
-                graph
-            });
-        }
+        this.postMessage({
+            command: 'initGraph',
+            graph
+        });
     }
 
     showProgressOverlay(message: string) {
-        if (this.panel) {
-            this.panel.webview.postMessage({ command: 'showProgressOverlay', text: message });
-        }
+        this.postMessage({ command: 'showProgressOverlay', text: message });
     }
 
     hideProgressOverlay() {
-        if (this.panel) {
-            this.panel.webview.postMessage({ command: 'hideProgressOverlay' });
-        }
+        this.postMessage({ command: 'hideProgressOverlay' });
     }
 
     focusNode(nodeId: string) {
         if (this.panel) {
             this.panel.reveal();
-            this.panel.webview.postMessage({ command: 'focusNode', nodeId });
+            this.postMessage({ command: 'focusNode', nodeId });
         }
     }
 
     focusWorkflow(workflowName: string) {
         if (this.panel) {
             this.panel.reveal();
-            this.panel.webview.postMessage({ command: 'focusWorkflow', workflowName });
+            this.postMessage({ command: 'focusWorkflow', workflowName });
         }
     }
 
     show(graph: WorkflowGraph, loadingOptions?: LoadingOptions) {
-        if (this.panel) {
-            this.panel.reveal();
-            this.panel.webview.html = this.getHtml(graph, loadingOptions);
-            return;
-        } else {
+        if (!this.panel) {
             this.panel = vscode.window.createWebviewPanel(
                 'codag',
                 'LLM Architecture',
@@ -311,9 +414,16 @@ export class WebviewManager {
             });
 
             this.setupMessageHandlers();
+        } else {
+            this.panel.reveal();
         }
 
+        // Reset ready state since HTML is replaced
+        this.resetWebviewState();
         this.panel.webview.html = this.getHtml(graph, loadingOptions);
+
+        // Send queued auth state AFTER reset (will be queued until webviewReady)
+        this.sendCurrentAuthState();
     }
 
     private getHtml(graph: WorkflowGraph, loadingOptions?: LoadingOptions): string {
@@ -349,9 +459,11 @@ export class WebviewManager {
         html = html.replace(/\{\{stylesUri\}\}/g, stylesUri.toString());
 
         // Replace script tag with graph data injection and bundled script
+        const loadingState = loadingOptions?.loading ? 'true' : 'false';
         const scriptReplacement = `
     <script nonce="${nonce}">
         window.__GRAPH_DATA__ = ${graphJson};
+        window.__LOADING_STATE__ = ${loadingState};
     </script>
     <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>`;

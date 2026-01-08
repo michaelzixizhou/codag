@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "codag",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.95.0"
   },
   "categories": [
     "Visualization",
@@ -58,7 +58,7 @@
       {
         "name": "workflow-context",
         "displayName": "Workflow Context",
-        "modelDescription": "Provides AI workflow graph context based on what the user is currently viewing in the workflow visualization panel. Automatically detects the active file, selected node in the visualization, and visible workflows. Use this tool when the user asks about: LLM workflows, workflow nodes, adding/modifying workflow steps, inserting nodes between existing steps, or working with multi-file LLM architectures. The tool returns node adjacency (what comes before/after each node), cross-file dependencies, workflow structure (entry/exit points, critical paths), and prioritizes the currently selected node. No parameters are typically needed - it auto-detects everything from the active editor and visualization state.",
+        "modelDescription": "ALWAYS USE THIS TOOL when the user mentions: workflow, graph, node, edge, visualization, diagram, flow, pipeline, LLM architecture, agent, chain, DAG, critical path, entry point, exit point, trigger, tool call, decision, integration, memory, parser, or any AI/ML workflow concept. This tool provides the complete workflow graph context including all nodes, their connections, source file locations, and workflow structure. Auto-detects the active file and selected node. Use this as the primary context source for ANY workflow-related question or task.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -77,7 +77,7 @@
       {
         "name": "workflow-file-reader",
         "displayName": "Workflow File Reader",
-        "modelDescription": "Reads source code file contents from the user's workspace. Use this when you need to see the actual implementation code for workflow nodes, examine function definitions, or understand code context. Can read entire files or specific line ranges. Useful when the user asks to modify code, add new functionality, or understand implementation details of workflow steps.",
+        "modelDescription": "Reads source code from workflow node locations. USE THIS when you need to see implementation code, modify workflow steps, add functionality, understand node behavior, or examine any file referenced in the workflow graph. Works with any file path or source location from workflow-context.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -100,7 +100,7 @@
       {
         "name": "workflow-query",
         "displayName": "Workflow Query",
-        "modelDescription": "Retrieves complete information about a specific workflow by name. Returns all nodes in the workflow with their types, source locations, entry/exit points, and critical path information. Use this when the user asks about a specific workflow's structure, wants to see all steps in a workflow, or needs to understand the complete flow of a named workflow. The response includes clickable node links that focus the visualization.",
+        "modelDescription": "Gets all nodes in a specific workflow. USE THIS when user asks about a workflow by name, wants to see workflow steps/structure, or asks 'what does X workflow do'. Returns nodes, entry/exit points, critical path.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -119,7 +119,7 @@
       {
         "name": "node-query",
         "displayName": "Node Query",
-        "modelDescription": "Searches and filters workflow nodes by various criteria: specific node IDs, workflow name, node type (trigger/llm/tool/decision/integration/memory/parser/output), or connectivity to other nodes. Returns detailed node information including source locations, adjacent nodes (what comes before/after), and optional code snippets. Use this for targeted node searches, finding nodes of a specific type, or analyzing node relationships.",
+        "modelDescription": "Searches nodes by type, name, or connections. USE THIS when user asks 'find all LLM nodes', 'what tools are available', 'what connects to X', or any node filtering question. Supports filtering by nodeType (trigger/llm/tool/decision/integration/memory/parser/output).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -153,7 +153,7 @@
       {
         "name": "workflow-navigate",
         "displayName": "Workflow Navigator",
-        "modelDescription": "Analyzes workflow execution paths and dependencies. Supports three operations: 'path' finds the shortest execution path between two nodes, 'upstream' discovers all nodes that come before a node (dependencies), 'downstream' finds all nodes that come after a node (dependents). Use this when the user asks about execution flow, data dependencies, impact analysis, or tracing how data flows through the workflow.",
+        "modelDescription": "Traces execution paths between nodes. USE THIS when user asks 'how does data flow from X to Y', 'what depends on X', 'what does X affect', 'path between nodes', or any dependency/impact analysis question. Operations: path (A to B), upstream (what feeds into), downstream (what depends on).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -196,7 +196,7 @@
   "devDependencies": {
     "@types/dagre": "^0.7.52",
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.80.0",
+    "@types/vscode": "^1.95.0",
     "concurrently": "^8.2.0",
     "esbuild": "^0.19.0",
     "typescript": "^5.0.0"

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from config import settings
 from models import User, TokenData
@@ -29,9 +29,10 @@ def decode_token(token: str) -> TokenData:
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         email: str = payload.get("sub")
+        user_id: str = payload.get("user_id")
         if email is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return TokenData(email=email)
+        return TokenData(email=email, user_id=user_id)
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 

@@ -57,8 +57,13 @@ export function areNodesInSameCollapsedGroup(
     targetId: string,
     workflowGroups: any[]
 ): boolean {
-    const sourceGroup = workflowGroups.find((g: any) => g.collapsed && g.nodes.includes(sourceId));
-    const targetGroup = workflowGroups.find((g: any) => g.collapsed && g.nodes.includes(targetId));
+    // Extract original IDs if these are virtual node IDs (nodeId__workflowId)
+    const getOriginalId = (id: string) => id.includes('__') ? id.split('__')[0] : id;
+    const origSource = getOriginalId(sourceId);
+    const origTarget = getOriginalId(targetId);
+
+    const sourceGroup = workflowGroups.find((g: any) => g.collapsed && g.nodes.includes(origSource));
+    const targetGroup = workflowGroups.find((g: any) => g.collapsed && g.nodes.includes(origTarget));
     return !!(sourceGroup && targetGroup && sourceGroup.id === targetGroup.id);
 }
 
