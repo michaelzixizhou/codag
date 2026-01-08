@@ -6,6 +6,13 @@ import { ViewState } from './copilot/types';
 import { FileTreeNode } from './file-picker';
 import { AuthState, OAuthProvider } from './auth';
 
+/**
+ * User preferences that can be set in VS Code settings
+ */
+export interface UserPreferences {
+    highContrastUI: boolean;
+}
+
 export interface LoadingOptions {
     loading?: boolean;
     progress?: { current: number; total: number };
@@ -22,8 +29,46 @@ export class WebviewManager {
     private currentAuthState: AuthState | null = null;  // Track current auth state for re-sending after HTML replacement
     private pendingMessages: any[] = [];
     private webviewReady = false;
+    private configChangeDisposable: vscode.Disposable | undefined;
 
-    constructor(private context: vscode.ExtensionContext) {}
+    constructor(private context: vscode.ExtensionContext) {
+        // Listen for configuration changes
+        this.configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('codag.preferences')) {
+                this.sendPreferences();
+            }
+        });
+        context.subscriptions.push(this.configChangeDisposable);
+    }
+
+    /**
+     * Get current user preferences from VS Code settings
+     */
+    private getPreferences(): UserPreferences {
+        const config = vscode.workspace.getConfiguration('codag.preferences');
+        return {
+            highContrastUI: config.get<boolean>('highContrastUI', false)
+        };
+    }
+
+    /**
+     * Send current preferences to webview
+     */
+    sendPreferences(): void {
+        const prefs = this.getPreferences();
+        this.postMessage({
+            command: 'updatePreferences',
+            preferences: prefs
+        });
+    }
+
+    /**
+     * Update a single preference in VS Code settings
+     */
+    private async updatePreference(key: string, value: any): Promise<void> {
+        const config = vscode.workspace.getConfiguration('codag.preferences');
+        await config.update(key, value, vscode.ConfigurationTarget.Global);
+    }
 
     /**
      * Post message to webview, queuing if not ready yet
@@ -188,6 +233,11 @@ export class WebviewManager {
                 } else if (message.command === 'webviewReady') {
                     // Webview is ready to receive messages
                     this.onWebviewReady();
+                    // Send initial preferences after webview is ready
+                    this.sendPreferences();
+                } else if (message.command === 'updatePreference') {
+                    // Update a single preference from webview toggle
+                    this.updatePreference(message.key, message.value);
                 }
             },
             undefined,

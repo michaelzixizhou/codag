@@ -45,6 +45,12 @@ export const TRANSITION_FAST = 300;
 export const TRANSITION_NORMAL = 500;
 export const VIEWPORT_UPDATE_DELAY = 150;
 
+// ===== UI COMPONENTS =====
+export const CONTROL_BUTTON_SIZE = 28;
+export const CONTROL_GAP = 4;
+export const DROPDOWN_OFFSET = 8;
+export const DROPDOWN_MIN_WIDTH = 200;
+
 // ===== DAGRE LAYOUT =====
 export const DAGRE_NODESEP = 50;
 export const DAGRE_RANKSEP = 78;
