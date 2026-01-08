@@ -1,5 +1,5 @@
 // Shared mutable state for webview client
-import { WorkflowGraph, WorkflowGroup, NodePosition } from './types';
+import { WorkflowGraph, WorkflowGroup, WorkflowComponent, NodePosition } from './types';
 
 // VSCode API instance
 export let vscode: any = null;
@@ -24,6 +24,9 @@ export let minimapViewportRect: any = null;
 
 // UI state
 export let currentlyOpenNodeId: string | null = null;
+
+// Component state (expanded components - default is collapsed)
+export let expandedComponents: Set<string> = new Set();
 
 // Shared node copies: originalId -> [virtualIds]
 export let sharedNodeCopies: Map<string, string[]> = new Map();
@@ -156,4 +159,33 @@ export function setSharedArrowsContainer(container: any): void {
 // Set expanded nodes
 export function setExpandedNodes(nodes: any[]): void {
     expandedNodes = nodes;
+}
+
+// Component state management
+export function isComponentExpanded(componentId: string): boolean {
+    return expandedComponents.has(componentId);
+}
+
+export function expandComponent(componentId: string): void {
+    expandedComponents.add(componentId);
+}
+
+export function collapseComponent(componentId: string): void {
+    expandedComponents.delete(componentId);
+}
+
+export function toggleComponent(componentId: string): void {
+    if (expandedComponents.has(componentId)) {
+        expandedComponents.delete(componentId);
+    } else {
+        expandedComponents.add(componentId);
+    }
+}
+
+export function getExpandedComponents(): Set<string> {
+    return expandedComponents;
+}
+
+export function setExpandedComponents(components: Set<string>): void {
+    expandedComponents = components;
 }

@@ -52,15 +52,6 @@ export class WorkflowDetector {
         /\.generate\(/,
     ];
 
-    // Tool/Function Patterns
-    private static readonly TOOL_PATTERNS = [
-        /tools\s*[:=]/,
-        /tool_choice\s*[:=]/,
-        /@tool\s*\(/,
-        /tool_use/,
-        /function_call/,
-    ];
-
     // AI Service Domain Patterns (non-LLM AI APIs using raw HTTP)
     private static readonly AI_SERVICE_DOMAINS = [
         // Voice/TTS
@@ -99,14 +90,6 @@ export class WorkflowDetector {
 
         // Generation endpoints
         /\/v\d+\/generate(?:\/|$)/i,
-    ];
-
-    // Streaming Patterns
-    private static readonly STREAMING_PATTERNS = [
-        /stream\s*[:=]\s*[Tt]rue/,
-        /\.stream\s*\(/,
-        /for\s+.*\s+in\s+.*stream/,
-        /for\s+await.*stream/,
     ];
 
     // Framework Patterns (keep for framework-specific detection)
@@ -504,15 +487,15 @@ export class WorkflowDetector {
         if (this.LLM_CLIENT_PATTERNS[13].test(content) || this.LLM_CLIENT_PATTERNS[14].test(content)) detected.push('HuggingFace');
         if (this.LLM_CLIENT_PATTERNS[15].test(content) || this.LLM_CLIENT_PATTERNS[16].test(content) || this.LLM_CLIENT_PATTERNS[17].test(content)) detected.push('Grok');
 
-        // AI Service Domains
-        if (/api\.elevenlabs\.io|elevenlabs/i.test(content)) detected.push('ElevenLabs');
-        if (/api\.(dev\.)?runwayml\.com|runwayml|runway/i.test(content)) detected.push('Runway');
-        if (/api\.sync\.so|sync_labs|synclabs|lipsync/i.test(content)) detected.push('Sync Labs');
-        if (/api\.stability\.ai|stability/i.test(content)) detected.push('Stability AI');
-        if (/api\.d-id\.com|d-id/i.test(content)) detected.push('D-ID');
-        if (/api\.heygen\.com|heygen/i.test(content)) detected.push('HeyGen');
-        if (/api\.leonardo\.ai|leonardo/i.test(content)) detected.push('Leonardo.ai');
-        if (/a2e|audio2expression/i.test(content)) detected.push('A2E');
+        // AI Service Domains - require API URLs or SDK imports, not just keywords
+        if (/api\.elevenlabs\.io|from\s+elevenlabs|import\s+elevenlabs|['"]elevenlabs['"]/i.test(content)) detected.push('ElevenLabs');
+        if (/api\.(dev\.)?runwayml\.com|runwayml_sdk|from\s+runwayml|['"]runwayml['"]/i.test(content)) detected.push('Runway');
+        if (/api\.sync\.so|sync_labs|synclabs|['"]sync-labs['"]/i.test(content)) detected.push('Sync Labs');
+        if (/api\.stability\.ai|stability_sdk|from\s+stability_sdk|['"]stability-sdk['"]/i.test(content)) detected.push('Stability AI');
+        if (/api\.d-id\.com|['"]d-id['"]/i.test(content)) detected.push('D-ID');
+        if (/api\.heygen\.com|heygen_sdk|['"]heygen['"]/i.test(content)) detected.push('HeyGen');
+        if (/api\.leonardo\.ai|leonardo_sdk|['"]leonardo-ai['"]/i.test(content)) detected.push('Leonardo.ai');
+        if (/audio2expression|a2e_sdk|['"]a2e['"]/i.test(content)) detected.push('A2E');
 
         // Frameworks
         for (const [framework, patterns] of Object.entries(this.FRAMEWORK_PATTERNS)) {

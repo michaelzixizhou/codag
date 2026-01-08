@@ -4,7 +4,6 @@ Uses authlib for OAuth 2.0 flow.
 """
 from typing import Optional
 from authlib.integrations.starlette_client import OAuth
-from starlette.config import Config as StarletteConfig
 
 from config import settings
 

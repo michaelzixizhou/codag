@@ -98,9 +98,9 @@ class GraphNode(BaseModel):
     type: str
     source: Optional[SourceLocation] = None
     metadata: Optional[Dict[str, Any]] = None
+    model: Optional[str] = None  # For LLM nodes: the model name (e.g., "GPT-4", "Claude 3.5 Sonnet", "Gemini 2.5 Flash")
     isEntryPoint: Optional[bool] = False  # Node with no incoming edges
     isExitPoint: Optional[bool] = False   # Node with no outgoing edges
-    isCriticalPath: Optional[bool] = False  # Part of longest execution path
 
 class GraphEdge(BaseModel):
     source: str
@@ -110,13 +110,20 @@ class GraphEdge(BaseModel):
     dataType: Optional[str] = None  # Data type (e.g., "str", "dict", "AnalyzeRequest")
     description: Optional[str] = None  # What the variable represents
     sourceLocation: Optional[SourceLocation] = None  # Where variable is passed in code
-    isCriticalPath: Optional[bool] = False  # Part of longest execution path
+
+class ComponentMetadata(BaseModel):
+    """Sub-component within a workflow (e.g., error handling, tool selection)."""
+    id: str  # "comp_1", "comp_2", etc.
+    name: str  # Descriptive name (e.g., "Error Handling", "Tool Selection")
+    description: str  # 1-2 sentence description
+    nodeIds: List[str]  # Node IDs contained in this component
 
 class WorkflowMetadata(BaseModel):
     id: str  # "workflow_1", "workflow_2", etc.
     name: str  # Descriptive name (e.g., "Document Analysis Pipeline")
     description: str  # 1-2 sentence description of workflow purpose
     nodeIds: List[str]  # List of node IDs that belong to this workflow
+    components: List[ComponentMetadata] = []  # Sub-components within workflow
 
 class WorkflowGraph(BaseModel):
     nodes: List[GraphNode]

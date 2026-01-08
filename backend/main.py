@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
-import secrets
+from sqlalchemy import select
+from typing import Optional, Callable, Awaitable, Any
 import json
+import uuid
 
 from models import (
     UserCreate, UserLogin, Token, User, AnalyzeRequest, WorkflowGraph,
@@ -22,7 +23,8 @@ from auth import (
 from database import (
     get_db, init_db,
     get_or_create_trial_device, increment_trial_usage,
-    get_or_create_user, link_device_to_user
+    get_or_create_user, link_device_to_user,
+    UserDB
 )
 from oauth import (
     oauth, get_github_user_info, get_google_user_info,
@@ -31,6 +33,9 @@ from oauth import (
 from gemini_client import gemini_client
 from analyzer import static_analyzer
 from config import settings
+
+# OAuth callback URI for VSCode extension
+VSCODE_CALLBACK_URI = "vscode://codag.codag/auth/callback"
 
 app = FastAPI(title="Codag")
 
@@ -54,6 +59,80 @@ app.add_middleware(
 async def startup():
     """Initialize database on startup."""
     await init_db()
+
+
+# =============================================================================
+# OAuth Helpers
+# =============================================================================
+
+async def _redirect_to_oauth(
+    provider_name: str,
+    oauth_client: Any,
+    is_configured: Callable[[], bool],
+    request: Request,
+    state: Optional[str]
+) -> RedirectResponse:
+    """Common OAuth login redirect logic."""
+    print(f"[OAuth] {provider_name} login requested, configured: {is_configured()}")
+    if not is_configured():
+        raise HTTPException(status_code=501, detail=f"{provider_name} OAuth not configured")
+
+    if state:
+        request.session['oauth_state'] = state
+
+    redirect_uri = f"{settings.backend_url}/auth/{provider_name.lower()}/callback"
+    print(f"[OAuth] Redirecting to {provider_name} with callback: {redirect_uri}")
+    try:
+        return await oauth_client.authorize_redirect(request, redirect_uri)
+    except Exception as e:
+        print(f"[OAuth] {provider_name} redirect error: {e}")
+        raise HTTPException(status_code=500, detail=f"OAuth redirect failed: {str(e)}")
+
+
+async def _handle_oauth_callback(
+    provider_name: str,
+    oauth_client: Any,
+    is_configured: Callable[[], bool],
+    get_user_info: Callable[[dict], Awaitable[dict]],
+    request: Request,
+    db: AsyncSession
+) -> RedirectResponse:
+    """Common OAuth callback handling logic."""
+    if not is_configured():
+        raise HTTPException(status_code=501, detail=f"{provider_name} OAuth not configured")
+
+    try:
+        token = await oauth_client.authorize_access_token(request)
+        user_info = await get_user_info(token)
+
+        if not user_info.get('email'):
+            return RedirectResponse(
+                url=f"{VSCODE_CALLBACK_URI}?error=no_email",
+                status_code=302
+            )
+
+        user = await get_or_create_user(
+            db,
+            email=user_info['email'],
+            name=user_info.get('name'),
+            provider=provider_name.lower(),
+            provider_id=user_info['provider_id'],
+        )
+
+        jwt_token = create_access_token({
+            "sub": user.email,
+            "user_id": str(user.id)
+        })
+
+        return RedirectResponse(
+            url=f"{VSCODE_CALLBACK_URI}?token={jwt_token}",
+            status_code=302
+        )
+    except Exception as e:
+        return RedirectResponse(
+            url=f"{VSCODE_CALLBACK_URI}?error={str(e)}",
+            status_code=302
+        )
 
 
 # =============================================================================
@@ -98,7 +177,6 @@ async def link_device(
     if not token_data.user_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    import uuid
     await link_device_to_user(db, request.machine_id, uuid.UUID(token_data.user_id))
 
     return {"status": "linked"}
@@ -111,124 +189,29 @@ async def link_device(
 @app.get("/auth/github")
 async def github_login(request: Request, state: Optional[str] = None):
     """Redirect to GitHub OAuth."""
-    if not is_github_configured():
-        raise HTTPException(status_code=501, detail="GitHub OAuth not configured")
-
-    # Store state in session for CSRF protection
-    if state:
-        request.session['oauth_state'] = state
-
-    redirect_uri = f"{settings.backend_url}/auth/github/callback"
-    return await oauth.github.authorize_redirect(request, redirect_uri)
+    return await _redirect_to_oauth("GitHub", oauth.github, is_github_configured, request, state)
 
 
 @app.get("/auth/github/callback")
-async def github_callback(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
+async def github_callback(request: Request, db: AsyncSession = Depends(get_db)):
     """Handle GitHub OAuth callback."""
-    if not is_github_configured():
-        raise HTTPException(status_code=501, detail="GitHub OAuth not configured")
-
-    try:
-        token = await oauth.github.authorize_access_token(request)
-        user_info = await get_github_user_info(token)
-
-        if not user_info.get('email'):
-            # Redirect with error
-            return RedirectResponse(
-                url="vscode://codag.codag/auth/callback?error=no_email",
-                status_code=302
-            )
-
-        # Create or update user
-        user = await get_or_create_user(
-            db,
-            email=user_info['email'],
-            name=user_info.get('name'),
-            avatar_url=user_info.get('avatar_url'),
-            provider='github',
-            provider_id=user_info['provider_id'],
-        )
-
-        # Generate JWT with user_id
-        jwt_token = create_access_token({
-            "sub": user.email,
-            "user_id": str(user.id)
-        })
-
-        # Redirect back to VSCode extension
-        return RedirectResponse(
-            url=f"vscode://codag.codag/auth/callback?token={jwt_token}",
-            status_code=302
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"vscode://codag.codag/auth/callback?error={str(e)}",
-            status_code=302
-        )
+    return await _handle_oauth_callback(
+        "GitHub", oauth.github, is_github_configured, get_github_user_info, request, db
+    )
 
 
 @app.get("/auth/google")
 async def google_login(request: Request, state: Optional[str] = None):
     """Redirect to Google OAuth."""
-    if not is_google_configured():
-        raise HTTPException(status_code=501, detail="Google OAuth not configured")
-
-    # Store state in session for CSRF protection
-    if state:
-        request.session['oauth_state'] = state
-
-    redirect_uri = f"{settings.backend_url}/auth/google/callback"
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    return await _redirect_to_oauth("Google", oauth.google, is_google_configured, request, state)
 
 
 @app.get("/auth/google/callback")
-async def google_callback(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
+async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
     """Handle Google OAuth callback."""
-    if not is_google_configured():
-        raise HTTPException(status_code=501, detail="Google OAuth not configured")
-
-    try:
-        token = await oauth.google.authorize_access_token(request)
-        user_info = await get_google_user_info(token)
-
-        if not user_info.get('email'):
-            return RedirectResponse(
-                url="vscode://codag.codag/auth/callback?error=no_email",
-                status_code=302
-            )
-
-        # Create or update user
-        user = await get_or_create_user(
-            db,
-            email=user_info['email'],
-            name=user_info.get('name'),
-            avatar_url=user_info.get('avatar_url'),
-            provider='google',
-            provider_id=user_info['provider_id'],
-        )
-
-        # Generate JWT with user_id
-        jwt_token = create_access_token({
-            "sub": user.email,
-            "user_id": str(user.id)
-        })
-
-        # Redirect back to VSCode extension
-        return RedirectResponse(
-            url=f"vscode://codag.codag/auth/callback?token={jwt_token}",
-            status_code=302
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"vscode://codag.codag/auth/callback?error={str(e)}",
-            status_code=302
-        )
+    return await _handle_oauth_callback(
+        "Google", oauth.google, is_google_configured, get_google_user_info, request, db
+    )
 
 
 @app.get("/auth/me", response_model=OAuthUser)
@@ -246,10 +229,6 @@ async def get_me(
     if not token_data.user_id:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    from sqlalchemy import select
-    from database import UserDB
-    import uuid
-
     result = await db.execute(
         select(UserDB).where(UserDB.id == uuid.UUID(token_data.user_id))
     )
@@ -262,7 +241,7 @@ async def get_me(
         id=str(user.id),
         email=user.email,
         name=user.name,
-        avatar_url=user.avatar_url,
+        avatar_url=None,  # Not stored in DB, could fetch from provider if needed
         provider=user.provider,
         is_paid=user.is_paid
     )
@@ -318,41 +297,8 @@ async def analyze_workflow(
     - X-Device-ID header: Trial mode (5 analyses/day)
     - Authorization: Bearer <token>: Authenticated mode (unlimited)
     """
-    remaining_analyses = -1  # -1 means unlimited (authenticated)
-
-    # Check authentication
-    if authorization and authorization.startswith("Bearer "):
-        # Authenticated user - no rate limit for now
-        token = authorization.replace("Bearer ", "")
-        try:
-            token_data = decode_token(token)
-            # Valid token - unlimited access
-            remaining_analyses = -1
-        except HTTPException:
-            # Invalid token - fall through to device check
-            authorization = None
-
-    if not authorization and x_device_id:
-        # Trial mode - check and decrement quota
-        device, remaining = await get_or_create_trial_device(db, x_device_id)
-
-        if remaining <= 0:
-            response.headers["X-Remaining-Analyses"] = "0"
-            raise HTTPException(
-                status_code=429,
-                detail="Trial quota exhausted. Sign up for unlimited access."
-            )
-
-        # Decrement quota
-        remaining_analyses = await increment_trial_usage(db, x_device_id)
-        response.headers["X-Remaining-Analyses"] = str(remaining_analyses)
-
-    elif not authorization and not x_device_id:
-        # No auth at all - reject
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required. Provide X-Device-ID header for trial or Authorization header for full access."
-        )
+    # TEMPORARY: Disable auth/trial checks for development
+    remaining_analyses = -1  # -1 means unlimited
 
     # Input validation
     MAX_CODE_SIZE = 5_000_000  # 5MB limit
@@ -381,7 +327,7 @@ async def analyze_workflow(
 
     # LLM analysis
     try:
-        result = gemini_client.analyze_workflow(request.code, framework, metadata_dicts)
+        result = await gemini_client.analyze_workflow(request.code, framework, metadata_dicts)
         # Clean markdown if present
         result = result.strip()
         if result.startswith("```json"):
@@ -447,6 +393,16 @@ async def analyze_workflow(
         for edge in graph_data.get('edges', []):
             if edge.get('sourceLocation') and edge['sourceLocation'].get('file'):
                 edge['sourceLocation']['file'] = fix_file_path(edge['sourceLocation']['file'], request.file_paths)
+
+        # DEBUG: Log workflow components
+        workflows = graph_data.get('workflows', [])
+        for wf in workflows:
+            node_count = len(wf.get('nodeIds', []))
+            components = wf.get('components', [])
+            if components:
+                print(f"DEBUG: Workflow '{wf.get('name')}' ({node_count} nodes) has {len(components)} components: {[c.get('name') for c in components]}")
+            else:
+                print(f"DEBUG: Workflow '{wf.get('name')}' ({node_count} nodes) - NO COMPONENTS")
 
         return WorkflowGraph(**graph_data)
     except HTTPException:

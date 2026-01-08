@@ -104,16 +104,34 @@ export class WebviewManager {
             async (message) => {
                 if (message.command === 'openFile') {
                     try {
-                        const filePath = message.file;
+                        let filePath = message.file;
 
                         if (!filePath || typeof filePath !== 'string') {
                             vscode.window.showErrorMessage(`Invalid file path: ${filePath}`);
                             return;
                         }
 
+                        // Handle relative paths - try to find the file in workspace
                         if (!filePath.startsWith('/')) {
-                            vscode.window.showErrorMessage(`File path must be absolute: ${filePath}`);
-                            return;
+                            const workspaceFolders = vscode.workspace.workspaceFolders;
+                            if (workspaceFolders && workspaceFolders.length > 0) {
+                                // Search for file matching the relative path/filename
+                                const searchPattern = filePath.includes('/') ? `**/${filePath}` : `**/${filePath}`;
+                                const matches = await vscode.workspace.findFiles(searchPattern, '**/node_modules/**', 5);
+                                if (matches.length === 1) {
+                                    filePath = matches[0].fsPath;
+                                } else if (matches.length > 1) {
+                                    // Multiple matches - try to find exact match
+                                    const exactMatch = matches.find(m => m.fsPath.endsWith(filePath));
+                                    filePath = exactMatch ? exactMatch.fsPath : matches[0].fsPath;
+                                } else {
+                                    vscode.window.showErrorMessage(`Could not find file: ${filePath}`);
+                                    return;
+                                }
+                            } else {
+                                vscode.window.showErrorMessage(`File path must be absolute: ${filePath}`);
+                                return;
+                            }
                         }
 
                         const fileUri = vscode.Uri.file(filePath);
@@ -159,8 +177,8 @@ export class WebviewManager {
                     // Just show the file picker on the existing graph
                     vscode.commands.executeCommand('codag.showFilePicker');
                 } else if (message.command === 'clearCacheAndReanalyze') {
-                    // Clear cache and trigger full reanalysis
-                    vscode.commands.executeCommand('codag.refresh');
+                    // Clear cache for selected files and reanalyze them
+                    vscode.commands.executeCommand('codag.clearCacheAndReanalyze', message.paths);
                 } else if (message.command === 'startOAuth') {
                     // Start OAuth flow for specified provider
                     const provider = message.provider as OAuthProvider;
@@ -210,6 +228,13 @@ export class WebviewManager {
      */
     showAuthPanel() {
         this.postMessage({ command: 'showAuthPanel' });
+    }
+
+    /**
+     * Show auth error in the webview notification
+     */
+    showAuthError(error: string) {
+        this.postMessage({ command: 'authError', error });
     }
 
     /**

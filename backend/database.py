@@ -18,6 +18,8 @@ engine = create_async_engine(
     settings.database_url,
     echo=False,
     pool_pre_ping=True,
+    pool_size=20,
+    max_overflow=30,
 )
 
 # Async session factory
@@ -37,7 +39,6 @@ class UserDB(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=True)
-    avatar_url = Column(String(1024), nullable=True)
     provider = Column(String(50), nullable=False)  # 'github' | 'google'
     provider_id = Column(String(255), nullable=False)
     is_paid = Column(Boolean, default=False)
@@ -148,7 +149,6 @@ async def get_or_create_user(
     session: AsyncSession,
     email: str,
     name: Optional[str],
-    avatar_url: Optional[str],
     provider: str,
     provider_id: str,
 ) -> "UserDB":
@@ -183,7 +183,6 @@ async def get_or_create_user(
             user = UserDB(
                 email=email,
                 name=name,
-                avatar_url=avatar_url,
                 provider=provider,
                 provider_id=provider_id,
             )
@@ -192,8 +191,6 @@ async def get_or_create_user(
     user.last_login_at = datetime.utcnow()
     if name and not user.name:
         user.name = name
-    if avatar_url and not user.avatar_url:
-        user.avatar_url = avatar_url
 
     await session.commit()
     await session.refresh(user)

@@ -265,10 +265,19 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Check trial status on activation (validates token with backend)
-    const remaining = await auth.checkTrialStatus();
-    log(`Trial status: ${remaining} analyses remaining`);
-    webview.updateAuthState(auth.getAuthState());
+    // Wire up auth errors to webview
+    auth.setOnAuthError((error: string) => {
+        log(`[auth] Error: ${error}`);
+        webview.showAuthError(error);
+    });
+
+    // Check trial status on activation (validates token with backend) - non-blocking
+    auth.checkTrialStatus().then(remaining => {
+        log(`Trial status: ${remaining} analyses remaining`);
+        webview.updateAuthState(auth.getAuthState());
+    }).catch(err => {
+        log(`Trial status check failed: ${err.message}`);
+    });
 
     // Handle OAuth start command from webview
     context.subscriptions.push(
@@ -567,6 +576,167 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Clear cache for specific files and reanalyze them
+    context.subscriptions.push(
+        vscode.commands.registerCommand('codag.clearCacheAndReanalyze', async (paths: string[]) => {
+            if (!paths || paths.length === 0) {
+                vscode.window.showWarningMessage('No files selected to clear cache.');
+                return;
+            }
+
+            log(`Clearing cache for ${paths.length} selected files...`);
+
+            // Invalidate cache for each selected file
+            for (const filePath of paths) {
+                await cache.invalidateFile(filePath);
+                log(`  Cleared: ${vscode.workspace.asRelativePath(filePath)}`);
+            }
+
+            log('Cache cleared, reanalyzing selected files...');
+
+            // Save selection and analyze directly
+            const allSourceFiles = await WorkflowDetector.getAllSourceFiles();
+            await saveFilePickerSelection(context, allSourceFiles, paths);
+
+            // Analyze selected files with bypassCache=true to force fresh analysis
+            await analyzeSelectedFiles(paths, true);
+        })
+    );
+
+    async function analyzeSelectedFiles(selectedPaths: string[], bypassCache: boolean = false) {
+        const startTime = Date.now();
+
+        try {
+            webview.showLoading('Analyzing selected files...');
+
+            // Read file contents
+            const fileContents: { path: string; content: string }[] = [];
+            for (const filePath of selectedPaths) {
+                try {
+                    const content = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+                    fileContents.push({
+                        path: filePath,
+                        content: Buffer.from(content).toString('utf8')
+                    });
+                } catch (error) {
+                    console.warn(`⚠️  Skipping file (read error): ${filePath}`, error);
+                }
+            }
+
+            if (fileContents.length === 0) {
+                webview.notifyWarning('No valid files to analyze.');
+                return;
+            }
+
+            log(`Analyzing ${fileContents.length} files...`);
+
+            // Build metadata
+            const uncachedUris = fileContents.map(f => vscode.Uri.file(f.path));
+            const metadata = await metadataBuilder.buildMetadata(uncachedUris);
+
+            // Detect framework/services
+            let framework: string | null = null;
+            const allServices = new Set<string>();
+            for (const file of fileContents) {
+                if (!framework) {
+                    framework = WorkflowDetector.detectFramework(file.content);
+                }
+                const services = WorkflowDetector.detectAllAIServices(file.content);
+                services.forEach(s => allServices.add(s));
+            }
+
+            if (allServices.size > 0) {
+                log(`Detected AI services: ${Array.from(allServices).join(', ')}`);
+            }
+
+            // Create batches
+            const batches = createDependencyBatches(fileContents, metadata, CONFIG.BATCH.MAX_SIZE, CONFIG.BATCH.MAX_TOKENS);
+            log(`Created ${batches.length} batch${batches.length > 1 ? 'es' : ''}`);
+
+            webview.notifyAnalysisStarted();
+            webview.updateProgress(0, batches.length);
+
+            const maxConcurrency = CONFIG.CONCURRENCY.MAX_PARALLEL;
+            const newGraphs: any[] = [];
+
+            // Analyze batches
+            for (let i = 0; i < batches.length; i += maxConcurrency) {
+                const batchSlice = batches.slice(i, i + maxConcurrency);
+
+                const batchPromises = batchSlice.map(async (batch, sliceIndex) => {
+                    const batchIndex = i + sliceIndex;
+                    const batchMetadata = metadata.filter(m =>
+                        batch.some(f => f.path === m.file)
+                    );
+                    const combinedCode = combineFilesXML(batch, batchMetadata);
+
+                    try {
+                        const analyzeResult = await api.analyzeWorkflow(
+                            combinedCode,
+                            batch.map(f => f.path),
+                            framework || undefined,
+                            batchMetadata
+                        );
+
+                        const graph = analyzeResult.graph;
+                        if (analyzeResult.remainingAnalyses >= 0) {
+                            await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
+                        }
+
+                        if (graph && graph.nodes) {
+                            newGraphs.push(graph);
+                            // Cache results
+                            for (const file of batch) {
+                                const fileNodes = graph.nodes.filter((n: any) => n.source?.file === file.path);
+                                const fileNodeIds = new Set(fileNodes.map((n: any) => n.id));
+                                const fileEdges = graph.edges.filter((e: any) =>
+                                    fileNodeIds.has(e.source) && fileNodeIds.has(e.target)
+                                );
+                                const fileWorkflows = (graph.workflows || []).filter((wf: any) =>
+                                    wf.nodeIds.some((id: string) => fileNodeIds.has(id))
+                                ).map((wf: any) => ({
+                                    ...wf,
+                                    nodeIds: wf.nodeIds.filter((id: string) => fileNodeIds.has(id))
+                                }));
+
+                                // Always cache results (even empty) to avoid re-analyzing
+                                await cache.setPerFile(file.path, file.content, {
+                                    nodes: fileNodes,
+                                    edges: fileEdges,
+                                    llms_detected: fileNodes.length > 0 ? (graph.llms_detected || []) : [],
+                                    workflows: fileWorkflows
+                                });
+                            }
+                        }
+
+                        webview.updateProgress(batchIndex + 1, batches.length);
+                        return graph;
+                    } catch (error: any) {
+                        log(`Batch ${batchIndex + 1} failed: ${error.message}`);
+                        throw error;
+                    }
+                });
+
+                await Promise.all(batchPromises);
+            }
+
+            // Merge and display results
+            if (newGraphs.length > 0) {
+                const mergedGraph = cache.mergeGraphs(newGraphs);
+                webview.show(mergedGraph);
+
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                log(`✓ Analysis complete in ${elapsed}s: ${mergedGraph.nodes.length} nodes, ${mergedGraph.edges.length} edges`);
+                webview.notifyAnalysisComplete(true);
+            } else {
+                webview.notifyWarning('No workflow data found in selected files.');
+            }
+        } catch (error: any) {
+            log(`Analysis failed: ${error.message}`);
+            webview.notifyAnalysisComplete(false, error.message);
+        }
+    }
+
     async function analyzeWorkspace(bypassCache: boolean = false) {
         // Track analysis start time
         const startTime = Date.now();
@@ -578,11 +748,14 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         try {
+            // Show panel immediately (don't block on file detection)
+            webview.showLoading('Scanning workspace...');
+
             const workflowFiles = await WorkflowDetector.detectInWorkspace();
             log(`Found ${workflowFiles.length} workflow files`);
 
             if (workflowFiles.length === 0) {
-                webview.notifyWarning('No AI workflow files found. Open a file with LLM API calls.');
+                webview.notifyWarning('No AI workflow files found. Open a folder with LLM API calls.');
                 return;
             }
 
@@ -662,11 +835,12 @@ export async function activate(context: vscode.ExtensionContext) {
                             log(`  - ${vscode.workspace.asRelativePath(f.path)}`);
                         });
 
-                        // Show cached graph immediately while analyzing
-                        if (cachedGraphs.length > 0) {
-                            const cachedGraph = cache.mergeGraphs(cachedGraphs);
-                            log(`Showing ${cachedGraph.nodes.length} cached nodes while analyzing...`);
-                            webview.show(cachedGraph, { loading: true });
+                        // Show cached graphs immediately while analyzing
+                        // getMostRecentPerFile() deduplicates by file path to avoid NaN errors from conflicting entries
+                        const allCached = await cache.getMostRecentPerFile();
+                        if (allCached && allCached.nodes.length > 0) {
+                            log(`Showing ${allCached.nodes.length} cached nodes (may include stale) while analyzing...`);
+                            webview.show(allCached, { loading: true });
                         } else {
                             log(`No cached graphs to show, showing loading...`);
                             webview.showLoading(`Analyzing ${uncachedCount} file${uncachedCount !== 1 ? 's' : ''}...`);
@@ -676,6 +850,10 @@ export async function activate(context: vscode.ExtensionContext) {
                         const uncachedUris = filesToAnalyze.map(f => vscode.Uri.file(f.path));
                         const metadata = await metadataBuilder.buildMetadata(uncachedUris);
 
+                        // Create batches (same as initial analysis)
+                        const batches = createDependencyBatches(filesToAnalyze, metadata, CONFIG.BATCH.MAX_SIZE, CONFIG.BATCH.MAX_TOKENS);
+                        log(`Created ${batches.length} batch${batches.length > 1 ? 'es' : ''} for ${filesToAnalyze.length} files`);
+
                         // Detect framework
                         let framework: string | null = null;
                         for (const file of filesToAnalyze) {
@@ -683,56 +861,92 @@ export async function activate(context: vscode.ExtensionContext) {
                             if (framework) break;
                         }
 
-                        // Analyze files
-                        try {
-                            const combinedCode = combineFilesXML(filesToAnalyze, metadata);
+                        webview.notifyAnalysisStarted();
+                        webview.updateProgress(0, batches.length);
 
-                            const analyzeResult = await api.analyzeWorkflow(
-                                combinedCode,
-                                filesToAnalyze.map(f => f.path),
-                                framework || undefined,
-                                metadata
-                            );
-                            const graph = analyzeResult.graph;
-                            if (analyzeResult.remainingAnalyses >= 0) {
-                                await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
+                        const maxConcurrency = CONFIG.CONCURRENCY.MAX_PARALLEL;
+
+                        // Process batches with concurrency limiting
+                        for (let i = 0; i < batches.length; i += maxConcurrency) {
+                            const batchSlice = batches.slice(i, i + maxConcurrency);
+
+                            const batchPromises = batchSlice.map(async (batch, sliceIndex) => {
+                                const batchIndex = i + sliceIndex;
+                                const batchPaths = batch.map(f => f.path);
+                                const batchMetadata = metadata.filter(m => batchPaths.includes(m.file));
+                                const combinedCode = combineFilesXML(batch, batchMetadata);
+
+                                log(`Analyzing batch ${batchIndex + 1}/${batches.length} (${batch.length} files)...`);
+
+                                try {
+                                    const analyzeResult = await api.analyzeWorkflow(
+                                        combinedCode,
+                                        batchPaths,
+                                        framework || undefined,
+                                        batchMetadata
+                                    );
+                                    const graph = analyzeResult.graph;
+                                    if (analyzeResult.remainingAnalyses >= 0) {
+                                        await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
+                                    }
+
+                                    newGraphs.push(graph);
+
+                                    // Cache results per file
+                                    for (const file of batch) {
+                                        const fileNodes = graph.nodes.filter((n: any) => n.source?.file === file.path);
+                                        const fileNodeIds = new Set(fileNodes.map((n: any) => n.id));
+                                        const fileEdges = graph.edges.filter((e: any) =>
+                                            fileNodeIds.has(e.source) && fileNodeIds.has(e.target)
+                                        );
+
+                                        const fileWorkflows = (graph.workflows || []).filter((wf: any) =>
+                                            wf.nodeIds.some((id: string) => fileNodeIds.has(id))
+                                        ).map((wf: any) => ({
+                                            ...wf,
+                                            nodeIds: wf.nodeIds.filter((id: string) => fileNodeIds.has(id))
+                                        }));
+
+                                        // Always cache results (even empty) to avoid re-analyzing
+                                        await cache.setPerFile(file.path, file.content, {
+                                            nodes: fileNodes,
+                                            edges: fileEdges,
+                                            llms_detected: fileNodes.length > 0 ? (graph.llms_detected || []) : [],
+                                            workflows: fileWorkflows
+                                        });
+                                    }
+
+                                    // Update progress and show incremental results
+                                    webview.updateProgress(batchIndex + 1, batches.length);
+                                    const partialMerged = cache.mergeGraphs([...cachedGraphs, ...newGraphs]);
+                                    webview.updateGraph(partialMerged);
+
+                                    log(`✓ Batch ${batchIndex + 1} complete: ${graph.nodes.length} nodes`);
+                                    return graph;
+                                } catch (error: any) {
+                                    log(`Batch ${batchIndex + 1} failed: ${error.message}`);
+                                    throw error;
+                                }
+                            });
+
+                            try {
+                                await Promise.all(batchPromises);
+                            } catch (error: any) {
+                                // Handle trial quota exhaustion - store task for retry after login
+                                if (error instanceof TrialExhaustedError) {
+                                    log('[auth] Trial quota exhausted during subsequent run, storing pending task...');
+                                    pendingAnalysisTask = () => analyzeWorkspace(false);
+                                    webview.showAuthPanel();
+                                    return;
+                                }
+                                log(`Analysis failed: ${error.message}`);
+                                webview.notifyAnalysisComplete(false, error.message);
+                                return;
                             }
-
-                            newGraphs.push(graph);
-
-                            // Cache results per file
-                            for (const file of filesToAnalyze) {
-                                const fileNodes = graph.nodes.filter((n: any) => n.source?.file === file.path);
-                                const fileNodeIds = new Set(fileNodes.map((n: any) => n.id));
-                                const fileEdges = graph.edges.filter((e: any) =>
-                                    fileNodeIds.has(e.source) && fileNodeIds.has(e.target)
-                                );
-
-                                // Only include workflows that contain nodes from this file
-                                const fileWorkflows = (graph.workflows || []).filter((wf: any) =>
-                                    wf.nodeIds.some((id: string) => fileNodeIds.has(id))
-                                ).map((wf: any) => ({
-                                    ...wf,
-                                    // Filter nodeIds to only include nodes from this file
-                                    nodeIds: wf.nodeIds.filter((id: string) => fileNodeIds.has(id))
-                                }));
-
-                                const isolatedGraph = {
-                                    nodes: fileNodes,
-                                    edges: fileEdges,
-                                    llms_detected: graph.llms_detected || [],
-                                    workflows: fileWorkflows
-                                };
-
-                                await cache.setPerFile(file.path, file.content, isolatedGraph);
-                            }
-
-                            log(`✓ Analysis complete: ${graph.nodes.length} nodes`);
-                        } catch (error: any) {
-                            log(`Analysis failed: ${error.message}`);
-                            webview.notifyAnalysisComplete(false, error.message);
-                            return;
                         }
+
+                        log(`✓ Analysis complete: ${newGraphs.reduce((sum, g) => sum + g.nodes.length, 0)} nodes total`);
+                        webview.notifyAnalysisComplete(true);
 
                         // Show merged graph (cached + new)
                         const mergedGraph = cache.mergeGraphs([...cachedGraphs, ...newGraphs]);
@@ -1269,7 +1483,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 webview.initGraph(cachedGraph);
             }
 
-            // If there are uncached files, analyze them
+            // If there are uncached files, analyze them in batches
             if (cacheResult.uncachedFiles.length > 0) {
                 log(`Analyzing ${cacheResult.uncachedFiles.length} uncached files...`);
                 webview.notifyAnalysisStarted();
@@ -1283,45 +1497,72 @@ export async function activate(context: vscode.ExtensionContext) {
                     if (framework) break;
                 }
 
-                const combinedCode = combineFilesXML(cacheResult.uncachedFiles, metadata);
-
-                const newResult = await api.analyzeWorkflow(
-                    combinedCode,
-                    cacheResult.uncachedFiles.map(f => f.path),
-                    framework || undefined,
-                    metadata
+                // Create dependency-based batches (same as main analysis flow)
+                const batches = createDependencyBatches(
+                    cacheResult.uncachedFiles,
+                    metadata,
+                    CONFIG.BATCH.MAX_SIZE,
+                    CONFIG.BATCH.MAX_TOKENS
                 );
-                const newGraph = newResult.graph;
-                if (newResult.remainingAnalyses >= 0) {
-                    await auth.updateRemainingAnalyses(newResult.remainingAnalyses);
-                }
+                log(`Created ${batches.length} batch${batches.length > 1 ? 'es' : ''}`);
 
-                // Cache new results
-                for (const file of cacheResult.uncachedFiles) {
-                    const fileNodes = newGraph.nodes.filter((n: any) => n.source?.file === file.path);
-                    const fileNodeIds = new Set(fileNodes.map((n: any) => n.id));
-                    const fileEdges = newGraph.edges.filter((e: any) =>
-                        fileNodeIds.has(e.source) && fileNodeIds.has(e.target)
-                    );
+                const newGraphs: any[] = [];
 
-                    // Only include workflows that contain nodes from this file
-                    const fileWorkflows = (newGraph.workflows || []).filter((wf: any) =>
-                        wf.nodeIds.some((id: string) => fileNodeIds.has(id))
-                    ).map((wf: any) => ({
-                        ...wf,
-                        nodeIds: wf.nodeIds.filter((id: string) => fileNodeIds.has(id))
-                    }));
+                // Process batches
+                for (let i = 0; i < batches.length; i++) {
+                    const batch = batches[i];
+                    const batchPaths = batch.map(f => f.path);
+                    const batchMetadata = metadata.filter(m => batchPaths.includes(m.file));
 
-                    await cache.setPerFile(file.path, file.content, {
-                        nodes: fileNodes,
-                        edges: fileEdges,
-                        llms_detected: newGraph.llms_detected || [],
-                        workflows: fileWorkflows
-                    });
+                    log(`Analyzing batch ${i + 1}/${batches.length} (${batch.length} files)...`);
+
+                    try {
+                        const combinedCode = combineFilesXML(batch, batchMetadata);
+                        const batchResult = await api.analyzeWorkflow(
+                            combinedCode,
+                            batchPaths,
+                            framework || undefined,
+                            batchMetadata
+                        );
+                        const batchGraph = batchResult.graph;
+
+                        if (batchResult.remainingAnalyses >= 0) {
+                            await auth.updateRemainingAnalyses(batchResult.remainingAnalyses);
+                        }
+
+                        newGraphs.push(batchGraph);
+
+                        // Cache files from this batch
+                        for (const file of batch) {
+                            const fileNodes = batchGraph.nodes.filter((n: any) => n.source?.file === file.path);
+                            const fileNodeIds = new Set(fileNodes.map((n: any) => n.id));
+                            const fileEdges = batchGraph.edges.filter((e: any) =>
+                                fileNodeIds.has(e.source) && fileNodeIds.has(e.target)
+                            );
+
+                            const fileWorkflows = (batchGraph.workflows || []).filter((wf: any) =>
+                                wf.nodeIds.some((id: string) => fileNodeIds.has(id))
+                            ).map((wf: any) => ({
+                                ...wf,
+                                nodeIds: wf.nodeIds.filter((id: string) => fileNodeIds.has(id))
+                            }));
+
+                            await cache.setPerFile(file.path, file.content, {
+                                nodes: fileNodes,
+                                edges: fileEdges,
+                                llms_detected: batchGraph.llms_detected || [],
+                                workflows: fileWorkflows
+                            });
+                        }
+
+                        log(`Batch ${i + 1} complete: ${batchGraph.nodes.length} nodes`);
+                    } catch (batchError: any) {
+                        log(`Batch ${i + 1} failed: ${batchError.message}`);
+                    }
                 }
 
                 // Merge all graphs
-                const allGraphs = [...cacheResult.cachedGraphs, newGraph];
+                const allGraphs = [...cacheResult.cachedGraphs, ...newGraphs];
                 const mergedGraph = cache.mergeGraphs(allGraphs);
                 webview.updateGraph(mergedGraph);
                 webview.notifyAnalysisComplete(true);

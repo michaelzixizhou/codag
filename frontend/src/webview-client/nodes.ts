@@ -89,6 +89,7 @@ export function renderNodes(
         .style('justify-content', 'center');
 
     titleWrapper.append('xhtml:span')
+        .attr('lang', 'en')
         .style('display', '-webkit-box')
         .style('-webkit-line-clamp', '3')
         .style('-webkit-box-orient', 'vertical')
@@ -101,6 +102,8 @@ export function renderNodes(
         .style('letter-spacing', '-0.01em')
         .style('line-height', '1.35')
         .style('word-wrap', 'break-word')
+        .style('hyphens', 'auto')
+        .style('-webkit-hyphens', 'auto')
         .text((d: any) => d.label);
 
     // Add icon at top-left of header (centered vertically with type label)

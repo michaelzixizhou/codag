@@ -126,19 +126,6 @@ export function setupSVG(): { svg: any; g: any; zoom: any; defs: any } {
         .attr('fill', 'currentColor')
         .style('fill', 'var(--vscode-editor-foreground)');
 
-    // Red arrow marker for critical path edges
-    defs.append('marker')
-        .attr('id', 'arrowhead-critical')
-        .attr('viewBox', '-0 -5 10 10')
-        .attr('refX', 0)
-        .attr('refY', 0)
-        .attr('orient', 'auto')
-        .attr('markerWidth', 2.8)
-        .attr('markerHeight', 2.8)
-        .append('path')
-        .attr('d', 'M 0,-5 L 10,0 L 0,5')
-        .style('fill', '#FF6B6B');
-
     return { svg, g, zoom, defs };
 }
 

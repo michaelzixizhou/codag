@@ -106,10 +106,7 @@ export class WorkflowMetadataProvider {
         .map(n => n.id),
       exitPoints: graph.nodes
         .filter(n => n.isExitPoint && wf.nodeIds.includes(n.id))
-        .map(n => n.id),
-      criticalPath: graph.edges
-        .filter(e => e.isCriticalPath && wf.nodeIds.includes(e.source))
-        .map(e => e.source)
+        .map(n => n.id)
     }));
 
     // Extract cross-file edges

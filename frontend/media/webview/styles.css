@@ -428,11 +428,6 @@ body {
     transition: stroke 0.2s ease, stroke-width 0.2s ease;
     pointer-events: none;
 }
-.link.critical-path {
-    stroke-width: 6px;
-    stroke-opacity: 1;
-    stroke: #FF6B6B;
-}
 .entry-icon, .exit-icon {
     pointer-events: none;
 }
@@ -754,6 +749,10 @@ body {
 #minimap .minimap-node.memory { fill: #4DB6AC; }
 #minimap .minimap-node.parser { fill: #A1887F; }
 #minimap .minimap-node.output { fill: #90A4AE; }
+#minimap .minimap-node.orchestrator { fill: #E91E63; }
+#minimap .minimap-node.agent { fill: #CDDC39; }
+#minimap .minimap-node.retriever { fill: #00BCD4; }
+#minimap .minimap-node.guardrail { fill: #F44336; }
 #minimap .minimap-edge {
     stroke: var(--vscode-editor-foreground);
     stroke-width: 1px;
@@ -838,7 +837,7 @@ body {
 .directory-list {
     max-height: 300px;
     overflow-y: scroll;
-    padding: 4px 0;
+    padding: 4px 0 24px 0;
     padding-right: 10px;
     position: relative;
 }

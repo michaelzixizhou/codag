@@ -1,21 +1,9 @@
 import * as vscode from 'vscode';
 import { APIClient } from './api';
+import { AuthState, OAuthProvider } from './types';
 
-export type OAuthProvider = 'github' | 'google';
-
-export interface AuthState {
-    isAuthenticated: boolean;
-    isTrial: boolean;
-    remainingAnalyses: number;
-    user?: {
-        id: string;
-        email: string;
-        name?: string;
-        avatar_url?: string;
-        provider: OAuthProvider;
-        is_paid: boolean;
-    };
-}
+// Re-export for backwards compatibility
+export { AuthState, OAuthProvider };
 
 export class AuthManager {
     private static readonly TOKEN_KEY = 'codag.token';
@@ -29,6 +17,8 @@ export class AuthManager {
 
     // Callback to notify webview of auth state changes
     private onAuthStateChange?: (state: AuthState) => void;
+    // Callback to show auth errors in webview
+    private onAuthError?: (error: string) => void;
 
     constructor(
         private context: vscode.ExtensionContext,
@@ -63,15 +53,52 @@ export class AuthManager {
         if (token) {
             console.log('[auth] initialize: Setting token on API client');
             this.api.setToken(token);
+
+            // Fetch user if not in cache
+            let user = cachedState?.user;
+            if (!user) {
+                console.log('[auth] initialize: No cached user, fetching from API');
+                try {
+                    user = await this.api.getUser();
+                } catch (error: any) {
+                    // Clear token on auth errors (401/403) and user not found (404)
+                    const status = error.response?.status;
+                    if (status === 401 || status === 403 || status === 404) {
+                        console.log(`[auth] initialize: Token invalid (${status}), clearing`);
+                        await this.clearToken();
+                        return;
+                    }
+                    // For other errors (network, 500), keep token and use cached state
+                    console.log('[auth] initialize: API error but keeping token:', error.message);
+                    if (cachedState) {
+                        this.authState = cachedState;
+                        return;
+                    }
+                    return;
+                }
+            }
+
             this.authState = {
                 isAuthenticated: true,
                 isTrial: false,
                 remainingAnalyses: -1,
-                user: cachedState?.user,
+                user,
             };
+            await this.saveAuthState();
             console.log('[auth] initialize: Auth state set to authenticated');
         } else {
             console.log('[auth] initialize: No token found');
+            // Clear stale auth state if cached says authenticated but no token exists
+            if (cachedState?.isAuthenticated) {
+                console.log('[auth] initialize: Clearing stale auth state (no token but cachedState.isAuthenticated=true)');
+                this.authState = {
+                    isAuthenticated: false,
+                    isTrial: true,
+                    remainingAnalyses: 5,
+                    user: undefined,
+                };
+                await this.context.globalState.update(AuthManager.AUTH_STATE_KEY, this.authState);
+            }
         }
     }
 
@@ -92,9 +119,13 @@ export class AuthManager {
                     user: user,
                 };
                 await this.saveAuthState();
-            } catch {
-                // Token invalid
-                await this.clearToken();
+            } catch (error: any) {
+                // Clear token on auth errors (401/403) and user not found (404)
+                const status = error.response?.status;
+                if (status === 401 || status === 403 || status === 404) {
+                    await this.clearToken();
+                }
+                // For other errors, keep token
             }
         } else {
             // Token was cleared in another window - reset to trial
@@ -116,6 +147,14 @@ export class AuthManager {
      */
     setOnAuthStateChange(callback: (state: AuthState) => void): void {
         this.onAuthStateChange = callback;
+    }
+
+    /**
+     * Set callback for auth errors.
+     * Used to show errors in webview instead of VSCode notifications.
+     */
+    setOnAuthError(callback: (error: string) => void): void {
+        this.onAuthError = callback;
     }
 
     /**
@@ -208,7 +247,9 @@ export class AuthManager {
             const response = await this.api.checkDevice(this.getDeviceId());
             this.authState.remainingAnalyses = response.remaining_analyses;
             this.authState.isTrial = response.is_trial && !response.is_authenticated;
-            this.authState.isAuthenticated = response.is_authenticated;
+            // Only mark as authenticated if we have user info
+            // (device may be linked but token could be invalid)
+            this.authState.isAuthenticated = response.is_authenticated && !!this.authState.user;
             await this.saveAuthState();
             return response.remaining_analyses;
         } catch (error) {
@@ -263,11 +304,11 @@ export class AuthManager {
             };
 
             await this.saveAuthState();
-
-            vscode.window.showInformationMessage('Signed in successfully!');
         } catch (error: any) {
             console.error('OAuth callback failed:', error);
-            vscode.window.showErrorMessage(`Sign in failed: ${error.message}`);
+            if (this.onAuthError) {
+                this.onAuthError(`Sign in failed: ${error.message}`);
+            }
         }
     }
 
@@ -284,7 +325,9 @@ export class AuthManager {
             message = `Sign in failed: ${error}`;
         }
 
-        vscode.window.showErrorMessage(message);
+        if (this.onAuthError) {
+            this.onAuthError(message);
+        }
     }
 
     /**

@@ -286,6 +286,17 @@ export function setupMessageHandler(): void {
                 openAuthPanel();
                 break;
 
+            case 'authError':
+                // Show auth error in loading indicator
+                indicator.className = 'loading-indicator error';
+                iconSpan.textContent = '✕';
+                textSpan.textContent = message.error || 'Authentication failed';
+                indicator.style.display = 'block';
+                setTimeout(() => {
+                    indicator.style.display = 'none';
+                }, 4000);
+                break;
+
             case 'closeFilePicker':
                 // Close file picker immediately (no animation)
                 getFilePicker().close(false);

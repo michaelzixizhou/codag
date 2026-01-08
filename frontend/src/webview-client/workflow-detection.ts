@@ -1,9 +1,9 @@
 // Workflow detection and grouping logic
-import { WorkflowGraph, WorkflowGroup } from './types';
+import { WorkflowGraph, WorkflowGroup, WorkflowComponent } from './types';
 import { colorFromString } from './utils';
 
 /**
- * Ensure visual cues (entry/exit points, critical path) are set
+ * Ensure visual cues (entry/exit points) are set
  */
 export function ensureVisualCues(data: WorkflowGraph): void {
     // Build adjacency lists
@@ -29,42 +29,6 @@ export function ensureVisualCues(data: WorkflowGraph): void {
             node.isExitPoint = true;
         }
     });
-
-    // Detect critical path: find LLM nodes and mark path through them
-    const llmNodes = data.nodes.filter(n => n.type === 'llm');
-    if (llmNodes.length > 0 && !llmNodes.some(n => n.isCriticalPath)) {
-        // Simple heuristic: mark first LLM node and its connected path
-        const llmNode = llmNodes[0];
-        llmNode.isCriticalPath = true;
-
-        // Trace backwards to entry
-        let current: any = llmNode;
-        while (true) {
-            const incoming = incomingEdges.get(current.id) || [];
-            if (incoming.length === 0) break;
-
-            incoming[0].isCriticalPath = true;
-            const sourceNode = data.nodes.find(n => n.id === incoming[0].source);
-            if (sourceNode) {
-                sourceNode.isCriticalPath = true;
-                current = sourceNode;
-            } else break;
-        }
-
-        // Trace forwards to exit
-        current = llmNode;
-        while (true) {
-            const outgoing = outgoingEdges.get(current.id) || [];
-            if (outgoing.length === 0) break;
-
-            outgoing[0].isCriticalPath = true;
-            const targetNode = data.nodes.find(n => n.id === outgoing[0].target);
-            if (targetNode) {
-                targetNode.isCriticalPath = true;
-                current = targetNode;
-            } else break;
-        }
-    }
 }
 
 /**
@@ -164,10 +128,6 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
             });
 
             // Create a separate group for each connected component
-            const llmProviders = data.llms_detected && data.llms_detected.length > 0
-                ? data.llms_detected.join(', ')
-                : 'LLM';
-
             if (connectedComponents.length > 1) {
                 console.warn(
                     `Workflow "${workflow.name}" contains ${connectedComponents.length} disconnected components.`
@@ -179,15 +139,24 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
                     ? `${baseId}_${compIdx}`
                     : baseId;
 
+                // Get actual node data for this component
+                const componentNodesData = componentNodes.map(id =>
+                    data.nodes.find(n => n.id === id)
+                ).filter(n => n);
+
+                // Find LLM nodes within this component to determine model names
+                const llmNodes = componentNodesData.filter(n => n?.type === 'llm');
+                const modelNames = llmNodes
+                    .map(n => n?.model)
+                    .filter((m): m is string => !!m);
+                const llmProviders = modelNames.length > 0
+                    ? [...new Set(modelNames)].join(', ')
+                    : 'LLM';
+
                 let groupName = workflow.name;
 
                 if (connectedComponents.length > 1) {
-                    const componentNodesData = componentNodes.map(id =>
-                        data.nodes.find(n => n.id === id)
-                    ).filter(n => n);
-
                     const entryNodes = componentNodesData.filter(n => n?.isEntryPoint);
-                    const llmNodes = componentNodesData.filter(n => n?.type === 'llm');
 
                     if (entryNodes.length > 0 && entryNodes[0]) {
                         groupName = `${workflow.name} - ${entryNodes[0].label}`;
@@ -198,6 +167,28 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
                     }
                 }
 
+                // Parse components from workflow metadata
+                const workflowComponents: WorkflowComponent[] = [];
+                const originalWorkflow = data.workflows.find(w => w.id === baseId || w.id === workflow.id);
+                if (originalWorkflow?.components) {
+                    const componentNodeSet = new Set(componentNodes);
+                    originalWorkflow.components.forEach(comp => {
+                        // Only include components whose nodes are all in this connected component
+                        const compNodesInComponent = comp.nodeIds.filter(id => componentNodeSet.has(id));
+                        if (compNodesInComponent.length >= 3 && compNodesInComponent.length === comp.nodeIds.length) {
+                            workflowComponents.push({
+                                id: comp.id,
+                                name: comp.name,
+                                description: comp.description,
+                                nodes: comp.nodeIds,
+                                collapsed: true,  // Default: collapsed
+                                color: colorFromString(comp.id),
+                                workflowId: groupId
+                            });
+                        }
+                    });
+                }
+
                 groups.push({
                     id: groupId,
                     name: groupName,
@@ -206,7 +197,8 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
                     llmProviders: llmProviders,
                     collapsed: false,
                     color: colorFromString(groupId),
-                    level: 1
+                    level: 1,
+                    components: workflowComponents
                 });
             });
         });
@@ -272,8 +264,12 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
         const groupNodesList = Array.from(groupNodes);
 
         if (groupNodesList.length >= 3) {
-            const llmProviders = data.llms_detected && data.llms_detected.length > 0
-                ? data.llms_detected.join(', ')
+            // Get model names from the actual LLM nodes in this group
+            const modelNames = Array.from(llmNodesInGroup)
+                .map((n: any) => n.model)
+                .filter((m: string) => !!m);
+            const llmProviders = modelNames.length > 0
+                ? [...new Set(modelNames)].join(', ')
                 : 'LLM';
 
             const groupName = llmNodesInGroup.size > 1
@@ -288,7 +284,8 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
                 llmProviders: llmProviders,
                 collapsed: false,
                 color: colorFromString(groupId),
-                level: 1
+                level: 1,
+                components: []  // No components detected client-side
             });
         }
     });

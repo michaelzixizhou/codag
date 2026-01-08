@@ -38,7 +38,6 @@ export interface WorkflowInfo {
   nodeIds: string[];     // All node IDs in this workflow
   entryPoints: string[]; // Node IDs
   exitPoints: string[];  // Node IDs
-  criticalPath: string[]; // Node IDs in critical path
 }
 
 // Cross-file dependency info

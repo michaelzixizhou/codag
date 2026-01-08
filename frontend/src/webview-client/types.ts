@@ -16,12 +16,10 @@ interface Window {
     closePanel: () => void;
 }
 
-// Graph data types
-export interface SourceLocation {
-    file: string;
-    line: number;
-    function: string;
-}
+// Re-export shared types from parent (avoids duplication)
+export { SourceLocation } from '../types';
+
+// Graph data types (extended for D3/visualization)
 
 export interface WorkflowNode {
     id: string;
@@ -29,9 +27,9 @@ export interface WorkflowNode {
     type: 'trigger' | 'llm' | 'tool' | 'decision' | 'integration' | 'memory' | 'parser' | 'output';
     description?: string;
     source?: SourceLocation;
+    model?: string;  // For LLM nodes: the model name (e.g., "gpt-4", "gemini-2.5-flash")
     isEntryPoint?: boolean;
     isExitPoint?: boolean;
-    isCriticalPath?: boolean;
     x?: number;
     y?: number;
     fx?: number;
@@ -45,7 +43,13 @@ export interface WorkflowEdge {
     dataType?: string;
     description?: string;
     sourceLocation?: SourceLocation;
-    isCriticalPath?: boolean;
+}
+
+export interface ComponentMetadata {
+    id: string;
+    name: string;
+    description?: string;
+    nodeIds: string[];
 }
 
 export interface Workflow {
@@ -53,6 +57,7 @@ export interface Workflow {
     name: string;
     description?: string;
     nodeIds: string[];
+    components?: ComponentMetadata[];
 }
 
 export interface WorkflowGraph {
@@ -60,6 +65,24 @@ export interface WorkflowGraph {
     edges: WorkflowEdge[];
     llms_detected: string[];
     workflows: Workflow[];
+}
+
+export interface WorkflowComponent {
+    id: string;
+    name: string;
+    description?: string;
+    nodes: string[];  // Node IDs in this component
+    collapsed: boolean;  // UI state
+    color: string;
+    workflowId: string;  // Parent workflow ID
+    bounds?: {
+        minX: number;
+        maxX: number;
+        minY: number;
+        maxY: number;
+    };
+    centerX?: number;
+    centerY?: number;
 }
 
 export interface WorkflowGroup {
@@ -79,6 +102,7 @@ export interface WorkflowGroup {
     };
     centerX?: number;
     centerY?: number;
+    components: WorkflowComponent[];  // Sub-components within workflow
 }
 
 export interface NodePosition {
@@ -91,6 +115,7 @@ export interface NodePosition {
 export interface SavedState {
     zoomTransform: any;
     collapsedWorkflows: string[];
+    expandedComponents: string[];  // Component IDs that are expanded (default: collapsed)
     selectedNodeId: string | null;
     nodePositions: Map<string, NodePosition>;
 }

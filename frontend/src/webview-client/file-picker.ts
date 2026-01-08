@@ -455,10 +455,11 @@ export class FilePicker {
         // Delete Cache & Reanalyze button
         const clearCacheBtn = this.modal.querySelector('#file-picker-clear-cache');
         clearCacheBtn?.addEventListener('click', () => {
-            this.close(false);
+            const paths = Array.from(this.selectedPaths);
+            this.close();
             this.resolvePromise?.(null);
-            // Extension will show VS Code confirmation dialog
-            state.vscode.postMessage({ command: 'clearCacheAndReanalyze' });
+            // Send selected files to clear cache and reanalyze
+            state.vscode.postMessage({ command: 'clearCacheAndReanalyze', paths });
         });
 
         // Search input

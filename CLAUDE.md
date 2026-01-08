@@ -27,7 +27,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **AST-aware caching**: Only hashes LLM-relevant code (ignores comments/whitespace changes)
 - **Per-file caching**: Each file cached independently; only changed files reanalyzed (no cross-file edges)
 - **Separated SVG layers**: Edge paths container rendered before edge labels container
-- **Critical path validation**: Must start at entry point, end at exit point, no branching
 - **Workflow connectivity**: All nodes must be reachable via edges, no orphaned nodes
 
 ## Commands
@@ -60,9 +59,8 @@ npm run compile     # Compile TypeScript
 ## Critical Files
 
 **Backend:**
-- `backend/gemini_client.py` - LLM prompt for workflow extraction with strict validation rules (lines 17-280)
-  - Critical path rules: Must start at entry, end at exit, no branching (lines 207-235)
-  - Workflow connectivity validation: All nodes must be reachable (lines 262-279)
+- `backend/gemini_client.py` - Async LLM calls using `asyncio.to_thread()` for non-blocking concurrency
+- `backend/prompts.py` - LLM prompt for workflow extraction with strict validation rules
 - `backend/models.py` - Pydantic models including `WorkflowGraph`, `SourceLocation`, `WorkflowNode`, `OAuthUser`, `DeviceCheckResponse`
 - `backend/analyzer.py` - Static analysis patterns for LLM detection
 - `backend/main.py` - FastAPI server with `/analyze`, OAuth endpoints (`/auth/github`, `/auth/google`, `/auth/device`)
@@ -71,13 +69,8 @@ npm run compile     # Compile TypeScript
 
 **Frontend:**
 - `frontend/src/extension.ts` - VSCode commands, analysis orchestration, timing logs, handles `openFile` messages
-- `frontend/src/webview.ts` - D3.js/Dagre visualization with:
-  - Separate containers for edge paths (bottom layer) and edge labels (top layer) (lines 928-956)
-  - Edge hover handlers for both regular and critical paths (lines 969-1015)
-  - Smart tooltip positioning to prevent cutoff (lines 1542-1578)
-  - Expand/collapse all workflows functionality (lines 1422-1439)
-  - Edge label visibility logic for collapsed groups (lines 1330-1356)
-- `frontend/src/webview/styles.ts` - All CSS styling (NO `!important` on critical path for hover to work)
+- `frontend/src/webview-client/` - D3.js/Dagre visualization (modular)
+- `frontend/src/webview/styles.ts` - All CSS styling
 - `frontend/src/webview/icons.ts` - SVG icons for 8 node types
 - `frontend/src/analyzer.ts` - Client-side LLM detection patterns
 - `frontend/src/cache.ts` - Per-file caching with AST-aware hashing (`getPerFile`, `setPerFile`, `getMultiplePerFile`)
@@ -110,19 +103,11 @@ Each node includes `source: {file, line, function}` for code navigation.
 4. Run `cd frontend && npm run compile`
 
 **Change prompt behavior:**
-- Edit `backend/gemini_client.py` lines 17-280 (main prompt structure)
-- Key sections:
-  - Node type definitions: Lines ~50-100
-  - Critical path rules: Lines 207-235
-  - Workflow connectivity validation: Lines 262-279
+- Edit `backend/prompts.py` (main prompt structure)
 - Restart backend: `make stop && make run`
 - Clear cache via command palette: "Codag: Clear Cache"
 
 ## Known Issues & Solutions
-
-**Critical path edge hover not working:**
-- Cause: CSS `!important` declarations override inline hover styles
-- Solution: Remove `!important` from `.link.critical-path` in `styles.ts`
 
 **Edge labels overlap edges:**
 - Cause: DOM rendering order (edges and labels interleaved)
@@ -148,9 +133,8 @@ Each node includes `source: {file, line, function}` for code navigation.
 - **Special Indicators**:
   - Green outline: Entry point nodes (isEntryPoint: true)
   - Blue outline: Exit point nodes (isExitPoint: true)
-  - Red edge: Critical path (isCriticalPath: true)
 - **Minimap**: Bottom-left corner with viewport rectangle
-- **Legend**: Bottom-left above minimap, shows entry/exit/critical path indicators
+- **Legend**: Bottom-left above minimap, shows entry/exit indicators
 
 ## Authentication & Trial System
 

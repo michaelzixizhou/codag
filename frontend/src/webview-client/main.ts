@@ -4,6 +4,7 @@ import * as state from './state';
 import { setupSVG } from './setup';
 import { layoutWorkflows } from './layout';
 import { renderGroups, renderCollapsedGroups } from './groups';
+import { renderCollapsedComponents } from './components';
 import { renderEdges } from './edges';
 import { renderNodes } from './nodes';
 import { dragstarted, dragged, dragended } from './drag';
@@ -11,7 +12,7 @@ import { setupControls, fitToScreen, formatGraph } from './controls';
 import { renderMinimap, setupMinimapZoomListener } from './minimap';
 import { setupClosePanel, closePanel } from './panel';
 import { setupMessageHandler } from './messages';
-import { updateGroupVisibility } from './visibility';
+import { updateGroupVisibility, updateComponentVisibility } from './visibility';
 import { ensureVisualCues, detectWorkflowGroups, updateSnapshotStats } from './workflow-detection';
 import { setupDirectory } from './directory';
 import { setupAuthHandlers } from './auth';
@@ -60,6 +61,9 @@ declare function acquireVsCodeApi(): any;
 
     // Render collapsed groups (after edges/nodes for z-index)
     renderCollapsedGroups(updateGroupVisibility);
+
+    // Render collapsed components (within workflows)
+    renderCollapsedComponents(updateComponentVisibility);
 
     // Setup controls (zoom, expand/collapse, format, refresh)
     setupControls(updateGroupVisibility);

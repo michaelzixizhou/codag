@@ -1,79 +1,31 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import * as vscode from 'vscode';
+import {
+    SourceLocation,
+    WorkflowNode,
+    WorkflowEdge,
+    WorkflowMetadata,
+    WorkflowGraph,
+    LocationMetadata,
+    FileMetadata,
+    OAuthUser,
+    DeviceCheckResponse,
+    AnalyzeResult
+} from './types';
 
-export interface SourceLocation {
-    file: string;
-    line: number;
-    function: string;
-}
-
-export interface WorkflowNode {
-    id: string;
-    label: string;
-    description?: string;
-    type: string;
-    source?: SourceLocation;
-    metadata?: any;
-    isEntryPoint?: boolean;
-    isExitPoint?: boolean;
-    isCriticalPath?: boolean;
-}
-
-export interface WorkflowEdge {
-    source: string;
-    target: string;
-    label?: string;
-    isCriticalPath?: boolean;
-}
-
-export interface LocationMetadata {
-    line: number;
-    type: string;
-    description: string;
-    function: string;
-    variable?: string;
-}
-
-export interface FileMetadata {
-    file: string;
-    locations: LocationMetadata[];
-    relatedFiles: string[];
-}
-
-export interface WorkflowMetadata {
-    id: string;
-    name: string;
-    description: string;
-    nodeIds: string[];
-}
-
-export interface WorkflowGraph {
-    nodes: WorkflowNode[];
-    edges: WorkflowEdge[];
-    llms_detected: string[];
-    workflows: WorkflowMetadata[];
-}
-
-export interface DeviceCheckResponse {
-    machine_id: string;
-    remaining_analyses: number;
-    is_trial: boolean;
-    is_authenticated: boolean;
-}
-
-export interface OAuthUser {
-    id: string;
-    email: string;
-    name?: string;
-    avatar_url?: string;
-    provider: 'github' | 'google';
-    is_paid: boolean;
-}
-
-export interface AnalyzeResult {
-    graph: WorkflowGraph;
-    remainingAnalyses: number;  // -1 for unlimited (authenticated users)
-}
+// Re-export types for backwards compatibility
+export {
+    SourceLocation,
+    WorkflowNode,
+    WorkflowEdge,
+    WorkflowMetadata,
+    WorkflowGraph,
+    LocationMetadata,
+    FileMetadata,
+    OAuthUser,
+    DeviceCheckResponse,
+    AnalyzeResult
+};
 
 /**
  * Custom error for trial quota exhaustion.
@@ -97,7 +49,7 @@ export class APIClient {
         this.baseURL = baseURL;
         this.client = axios.create({
             baseURL,
-            timeout: 30000 // 30 second default timeout
+            timeout: 0 // No timeout - analysis can take a while
         });
 
         this.client.interceptors.request.use(config => {

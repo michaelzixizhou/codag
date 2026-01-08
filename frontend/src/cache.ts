@@ -218,6 +218,35 @@ export class CacheManager {
     }
 
     /**
+     * Get the most recent cached graph for each unique file path.
+     * Unlike getMostRecentWorkflows(), this deduplicates by file path,
+     * keeping only the most recently cached version of each file.
+     * This is useful for showing stale cached data while re-analyzing changed files.
+     * @param filterPaths Optional array of file paths to filter by. If provided, only returns graphs for these files.
+     */
+    async getMostRecentPerFile(filterPaths?: string[]): Promise<WorkflowGraph | null> {
+        await this.initPromise;
+
+        // Group entries by file path, keeping only the most recent (by timestamp)
+        const byFilePath: Record<string, PerFileCacheEntry> = {};
+        for (const entry of Object.values(this.perFileCache)) {
+            // If filter is provided, skip entries not in the filter
+            if (filterPaths && !filterPaths.includes(entry.filePath)) {
+                continue;
+            }
+            const existing = byFilePath[entry.filePath];
+            if (!existing || entry.timestamp > existing.timestamp) {
+                byFilePath[entry.filePath] = entry;
+            }
+        }
+
+        const graphs = Object.values(byFilePath).map(entry => entry.graph);
+        if (graphs.length === 0) return null;
+
+        return this.mergeGraphs(graphs);
+    }
+
+    /**
      * Generate a short hash prefix for a file path to ensure unique node IDs
      */
     private getFilePrefix(filePath: string): string {

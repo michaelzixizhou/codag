@@ -19,7 +19,22 @@ export interface FileAnalysis {
     llmRelatedVariables: Set<string>;
 }
 
+// LLM identifier patterns - shared across all analyzers
+const LLM_PATTERNS = [
+    /openai/i, /anthropic/i, /gemini/i, /genai/i,
+    /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
+    /llm/i, /model/i, /client/i, /chat/i, /completion/i,
+    /GenerativeModel/i, /xai/i, /grok/i
+];
+
 export class StaticAnalyzer {
+    /**
+     * Check if an identifier name is LLM-related
+     */
+    private isLLMIdentifier(name: string): boolean {
+        return LLM_PATTERNS.some(pattern => pattern.test(name));
+    }
+
     /**
      * Parse file and extract LLM workflow locations
      */
@@ -73,16 +88,6 @@ export class StaticAnalyzer {
         const seenLocations = new Set<string>(); // Track line+type to prevent duplicates
         let currentFunction = 'global';
 
-        // Helper to check if identifier is LLM-related
-        const isLLMIdentifier = (name: string): boolean => {
-            const llmPatterns = [
-                /openai/i, /anthropic/i, /gemini/i, /genai/i,
-                /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
-                /llm/i, /model/i, /client/i, /chat/i, /completion/i
-            ];
-            return llmPatterns.some(pattern => pattern.test(name));
-        };
-
         // Helper to add location without duplicates
         const addLocation = (loc: CodeLocation) => {
             const key = `${loc.line}-${loc.type}`;
@@ -112,7 +117,7 @@ export class StaticAnalyzer {
                 imports.push(source);
 
                 // Track LLM client imports
-                if (isLLMIdentifier(source)) {
+                if (this.isLLMIdentifier(source)) {
                     node.specifiers?.forEach((spec: any) => {
                         const name = spec.local?.name || spec.imported?.name;
                         if (name) llmRelatedVariables.add(name);
@@ -134,7 +139,7 @@ export class StaticAnalyzer {
 
                     // Check if initializer is LLM-related
                     if (varName && init) {
-                        if (init.type === 'NewExpression' && isLLMIdentifier(init.callee?.name || '')) {
+                        if (init.type === 'NewExpression' && this.isLLMIdentifier(init.callee?.name || '')) {
                             llmRelatedVariables.add(varName);
                             addLocation({
                                 line: node.loc.start.line,
@@ -317,16 +322,6 @@ export class StaticAnalyzer {
             const seenLocations = new Set<string>();
             let currentFunction = 'global';
 
-            // Helper to check if identifier is LLM-related
-            const isLLMIdentifier = (name: string): boolean => {
-                const llmPatterns = [
-                    /openai/i, /anthropic/i, /gemini/i, /genai/i,
-                    /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
-                    /llm/i, /model/i, /client/i, /chat/i, /completion/i
-                ];
-                return llmPatterns.some(pattern => pattern.test(name));
-            };
-
             // Helper to add location without duplicates
             const addLocation = (loc: CodeLocation) => {
                 const key = `${loc.line}-${loc.type}`;
@@ -358,7 +353,7 @@ export class StaticAnalyzer {
                         imports.push(source);
 
                         // Track LLM client imports
-                        if (isLLMIdentifier(source)) {
+                        if (this.isLLMIdentifier(source)) {
                             node.specifiers?.forEach((spec: any) => {
                                 const name = spec.local?.name || spec.imported?.name;
                                 if (name) llmRelatedVariables.add(name);
@@ -380,7 +375,7 @@ export class StaticAnalyzer {
                         const init = decl.init;
 
                         if (varName && init) {
-                            if (init.type === 'NewExpression' && isLLMIdentifier(init.callee?.name || '')) {
+                            if (init.type === 'NewExpression' && this.isLLMIdentifier(init.callee?.name || '')) {
                                 llmRelatedVariables.add(varName);
                                 if (node.loc) {
                                     addLocation({
@@ -422,7 +417,7 @@ export class StaticAnalyzer {
                             callee = parts.join('.');
                         }
 
-                        if (this.containsLLMVariable(callNode.callee, llmRelatedVariables) || isLLMIdentifier(callee)) {
+                        if (this.containsLLMVariable(callNode.callee, llmRelatedVariables) || this.isLLMIdentifier(callee)) {
                             if (callNode.loc) {
                                 addLocation({
                                     line: callNode.loc.start.line,
@@ -528,18 +523,6 @@ export class StaticAnalyzer {
                 /\/generate\b/i,
             ];
 
-            // Helper to check if identifier is LLM-related
-            const isLLMIdentifier = (name: string): boolean => {
-                const llmPatterns = [
-                    /genai/i, /gemini/i, /openai/i, /anthropic/i,
-                    /groq/i, /ollama/i, /cohere/i, /gpt/i, /claude/i,
-                    /llm/i, /model/i, /client/i, /chat/i, /completion/i,
-                    /GenerativeModel/i, /Gemini/i,
-                    /xai/i, /grok/i  // xAI/Grok
-                ];
-                return llmPatterns.some(pattern => pattern.test(name));
-            };
-
             // Helper to add location without duplicates
             const addLocation = (loc: CodeLocation) => {
                 const key = `${loc.line}-${loc.type}`;
@@ -572,7 +555,7 @@ export class StaticAnalyzer {
 
                     if (module) {
                         imports.push(module);
-                        if (isLLMIdentifier(module)) {
+                        if (this.isLLMIdentifier(module)) {
                             const importedNames = names.split(',').map(n => {
                                 const parts = n.trim().split(/\s+as\s+/);
                                 return parts[parts.length - 1];
@@ -584,7 +567,7 @@ export class StaticAnalyzer {
                             const parts = n.trim().split(/\s+as\s+/);
                             const importName = parts[0];
                             imports.push(importName);
-                            if (isLLMIdentifier(importName)) {
+                            if (this.isLLMIdentifier(importName)) {
                                 return parts[parts.length - 1];
                             }
                             return null;
@@ -620,7 +603,7 @@ export class StaticAnalyzer {
                     const varName = assignMatch[2];
                     const value = assignMatch[3];
 
-                    if (isLLMIdentifier(value)) {
+                    if (this.isLLMIdentifier(value)) {
                         llmRelatedVariables.add(varName);
                         functionsWithLLMCode.add(currentFunction); // Mark function as using LLM
                         addLocation({

@@ -88,22 +88,6 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
                 parts.push(`Exit: ${exitLinks.join(', ')}`);
             }
 
-            // Critical path (if any)
-            const criticalPathEdges = workflowEdges.filter(e => e.isCriticalPath);
-            if (criticalPathEdges.length > 0) {
-                const criticalNodeIds = new Set<string>();
-                criticalPathEdges.forEach(e => {
-                    criticalNodeIds.add(e.source);
-                    criticalNodeIds.add(e.target);
-                });
-                const criticalLinks = Array.from(criticalNodeIds)
-                    .map(id => {
-                        const n = workflowNodes.find(n => n.id === id);
-                        return n ? createNodeLink(id, n.label) : id;
-                    });
-                parts.push(`Critical: ${criticalLinks.join(' → ')}`);
-            }
-
             parts.push('');
             parts.push(formatLegend());
 

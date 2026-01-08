@@ -68,6 +68,7 @@ export function renderGroups(updateGroupVisibility: () => void): void {
         .style('fill', (d: any) => d.color)
         .style('fill-opacity', 0.03)
         .style('stroke', (d: any) => d.color)
+        .style('stroke-opacity', 0.4)
         .style('stroke-width', `${GROUP_STROKE_WIDTH}px`)
         .style('stroke-dasharray', '8,4')
         .style('opacity', (d: any) => (d.collapsed || d.id === 'group_orphans') ? 0 : 1)
