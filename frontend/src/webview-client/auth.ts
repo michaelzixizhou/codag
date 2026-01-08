@@ -162,7 +162,10 @@ export function getAuthState(): AuthState {
  */
 export function openAuthPanel(): void {
     const panel = document.getElementById('authPanel');
-    panel?.classList.add('open');
+    if (panel) {
+        panel.classList.remove('minimizing');
+        panel.classList.add('open');
+    }
 }
 
 /**
