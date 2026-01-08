@@ -70,11 +70,12 @@ export function setPreference<K extends keyof UserPreferences>(key: K, value: Us
 /**
  * Toggle a boolean preference
  */
-export function togglePreference(key: keyof UserPreferences): boolean | null {
-    if (typeof currentPreferences[key] === 'boolean') {
-        const newValue = !currentPreferences[key];
-        setPreference(key, newValue as any);
-        return newValue as boolean;
+export function togglePreference<K extends keyof UserPreferences>(key: K): boolean | null {
+    const currentValue = currentPreferences[key];
+    if (typeof currentValue === 'boolean') {
+        const newValue = !currentValue;
+        setPreference(key, newValue as UserPreferences[K]);
+        return newValue;
     }
     return null;
 }
