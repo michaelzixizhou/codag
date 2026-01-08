@@ -38,11 +38,12 @@ export class TrialExhaustedError extends Error {
 }
 
 export class APIClient {
-    private client: AxiosInstance;
+    public client: AxiosInstance;
     private token: string | null = null;
     private deviceId: string | null = null;
     private outputChannel: vscode.OutputChannel;
     private baseURL: string;
+    private authRefreshCallback?: () => Promise<boolean>;
 
     constructor(baseURL: string, outputChannel: vscode.OutputChannel) {
         this.outputChannel = outputChannel;
@@ -62,12 +63,31 @@ export class APIClient {
                 this.outputChannel.appendLine(`API Response: ${response.status} ${response.config.url}`);
                 return response;
             },
-            error => {
+            async error => {
                 this.outputChannel.appendLine(`API Error: ${error.message}`);
                 if (error.response) {
                     this.outputChannel.appendLine(`Status: ${error.response.status}`);
                     this.outputChannel.appendLine(`Data: ${JSON.stringify(error.response.data)}`);
                 }
+
+                // Handle 401 Unauthorized - attempt token refresh
+                if (error.response?.status === 401 && this.authRefreshCallback && !error.config?.['_refresh_attempted']) {
+                    try {
+                        this.outputChannel.appendLine('Token expired, attempting refresh...');
+                        const refreshed = await this.authRefreshCallback();
+
+                        if (refreshed) {
+                            // Mark as attempted to prevent infinite loops
+                            error.config['_refresh_attempted'] = true;
+                            // Retry the original request with new token
+                            this.outputChannel.appendLine('Token refreshed, retrying request...');
+                            return this.client(error.config);
+                        }
+                    } catch (refreshError: any) {
+                        this.outputChannel.appendLine(`Token refresh failed: ${refreshError.message}`);
+                    }
+                }
+
                 return Promise.reject(error);
             }
         );
@@ -78,6 +98,13 @@ export class APIClient {
      */
     getBaseUrl(): string {
         return this.baseURL;
+    }
+
+    /**
+     * Set callback for token refresh when 401 is received.
+     */
+    setAuthRefreshCallback(callback: () => Promise<boolean>): void {
+        this.authRefreshCallback = callback;
     }
 
     /**

@@ -12,13 +12,15 @@ import datetime
 from models import (
     UserCreate, UserLogin, Token, User, AnalyzeRequest, WorkflowGraph,
     DeviceCheckRequest, DeviceCheckResponse, DeviceLinkRequest,
-    OAuthUser, AuthStateResponse
+    OAuthUser, AuthStateResponse, RefreshTokenRequest
 )
 from auth import (
     get_password_hash,
     verify_password,
     create_access_token,
     decode_token,
+    create_refresh_token,
+    decode_refresh_token,
     users_db
 )
 from database import (
@@ -27,6 +29,7 @@ from database import (
     get_or_create_user, link_device_to_user,
     UserDB
 )
+from migrations import run_migrations
 from oauth import (
     oauth, get_github_user_info, get_google_user_info,
     is_github_configured, is_google_configured
@@ -63,6 +66,7 @@ app.add_middleware(
 async def startup():
     """Initialize database on startup."""
     await init_db()
+    await run_migrations()
 
 
 # =============================================================================
@@ -123,13 +127,23 @@ async def _handle_oauth_callback(
             provider_id=user_info['provider_id'],
         )
 
-        jwt_token = create_access_token({
+        # Generate access and refresh tokens
+        jwt_access_token = create_access_token({
             "sub": user.email,
             "user_id": str(user.id)
         })
 
+        jwt_refresh_token = create_refresh_token({
+            "sub": user.email,
+            "user_id": str(user.id)
+        })
+
+        # Store refresh token in database
+        user.refresh_token = jwt_refresh_token
+        await db.commit()
+
         return RedirectResponse(
-            url=f"{VSCODE_CALLBACK_URI}?token={jwt_token}",
+            url=f"{VSCODE_CALLBACK_URI}?token={jwt_access_token}&refreshToken={jwt_refresh_token}",
             status_code=302
         )
     except Exception as e:
@@ -251,6 +265,53 @@ async def get_me(
     )
 
 
+@app.post("/auth/refresh", response_model=Token)
+async def refresh_token(
+    request: RefreshTokenRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Refresh access token using refresh token."""
+    try:
+        token_data = decode_refresh_token(request.refresh_token)
+
+        if not token_data.user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        result = await db.execute(
+            select(UserDB).where(UserDB.id == uuid.UUID(token_data.user_id))
+        )
+        user = result.scalar_one_or_none()
+
+        if not user or user.refresh_token != request.refresh_token:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        # Generate new access token
+        new_access_token = create_access_token({
+            "sub": user.email,
+            "user_id": str(user.id)
+        })
+
+        # Generate new refresh token
+        new_refresh_token = create_refresh_token({
+            "sub": user.email,
+            "user_id": str(user.id)
+        })
+
+        # Store new refresh token
+        user.refresh_token = new_refresh_token
+        await db.commit()
+
+        return {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+
 # =============================================================================
 # Legacy Auth Endpoints (kept for backwards compatibility)
 # =============================================================================
@@ -268,8 +329,9 @@ async def register(user: UserCreate):
         "last_request_date": None
     }
 
-    token = create_access_token({"sub": user.email})
-    return {"access_token": token, "token_type": "bearer"}
+    access_token = create_access_token({"sub": user.email})
+    refresh_token = create_refresh_token({"sub": user.email})
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
 @app.post("/auth/login", response_model=Token)
@@ -278,8 +340,9 @@ async def login(user: UserLogin):
     if not user_data or not verify_password(user.password, user_data["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = create_access_token({"sub": user.email})
-    return {"access_token": token, "token_type": "bearer"}
+    access_token = create_access_token({"sub": user.email})
+    refresh_token = create_refresh_token({"sub": user.email})
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
 # =============================================================================

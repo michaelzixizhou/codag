@@ -8,6 +8,7 @@ export { AuthState, OAuthProvider };
 
 export class AuthManager {
     private static readonly TOKEN_KEY = 'codag.token';
+    private static readonly REFRESH_TOKEN_KEY = 'codag.refreshToken';
     private static readonly AUTH_STATE_KEY = 'codag.authState';
 
     private authState: AuthState = {
@@ -172,20 +173,32 @@ export class AuthManager {
     }
 
     /**
-     * Store the auth token.
+     * Get the current refresh token if available.
+     * Uses SecretStorage for secure, cross-window persistent storage.
+     */
+    private async getRefreshToken(): Promise<string | undefined> {
+        return this.context.secrets.get(AuthManager.REFRESH_TOKEN_KEY);
+    }
+
+    /**
+     * Store the auth token and refresh token.
      * Uses SecretStorage - triggers onDidChange in other windows.
      */
-    private async setToken(token: string): Promise<void> {
+    private async setToken(token: string, refreshToken?: string): Promise<void> {
         await this.context.secrets.store(AuthManager.TOKEN_KEY, token);
+        if (refreshToken) {
+            await this.context.secrets.store(AuthManager.REFRESH_TOKEN_KEY, refreshToken);
+        }
         this.api.setToken(token);
     }
 
     /**
-     * Clear the auth token.
+     * Clear the auth token and refresh token.
      * Uses SecretStorage - triggers onDidChange in other windows.
      */
     private async clearToken(): Promise<void> {
         await this.context.secrets.delete(AuthManager.TOKEN_KEY);
+        await this.context.secrets.delete(AuthManager.REFRESH_TOKEN_KEY);
         this.api.clearToken();
     }
 
@@ -195,6 +208,42 @@ export class AuthManager {
     private async saveAuthState(): Promise<void> {
         await this.context.globalState.update(AuthManager.AUTH_STATE_KEY, this.authState);
         this.onAuthStateChange?.(this.authState);
+    }
+
+    /**
+     * Refresh access token using refresh token.
+     * Called when access token expires (401 response).
+     */
+    async refreshAccessToken(): Promise<boolean> {
+        try {
+            const refreshToken = await this.getRefreshToken();
+            if (!refreshToken) {
+                console.log('[auth] No refresh token available');
+                return false;
+            }
+
+            console.log('[auth] Refreshing access token...');
+            const response = await this.api.client.post('/auth/refresh', {
+                refresh_token: refreshToken
+            });
+
+            const { access_token, refresh_token } = response.data;
+            await this.setToken(access_token, refresh_token);
+            console.log('[auth] Access token refreshed successfully');
+            return true;
+        } catch (error: any) {
+            console.error('[auth] Token refresh failed:', error.message);
+            // Clear tokens on refresh failure - user needs to re-authenticate
+            await this.clearToken();
+            this.authState = {
+                isAuthenticated: false,
+                isTrial: true,
+                remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES,
+                user: undefined,
+            };
+            await this.saveAuthState();
+            return false;
+        }
     }
 
     /**
@@ -252,6 +301,11 @@ export class AuthManager {
             return response.remaining_analyses;
         } catch (error) {
             console.error('Failed to check trial status:', error);
+            // Gracefully handle network errors - keep existing state
+            if (!this.authState.isAuthenticated) {
+                // For trial users, keep their remaining count or use default
+                this.authState.remainingAnalyses = this.authState.remainingAnalyses ?? CONFIG.TRIAL.TOTAL_ANALYSES;
+            }
             return this.authState.remainingAnalyses;
         }
     }
@@ -283,9 +337,9 @@ export class AuthManager {
      * Handle OAuth callback from URI handler.
      * Called when vscode://codag/auth/callback is triggered.
      */
-    async handleOAuthCallback(token: string): Promise<void> {
+    async handleOAuthCallback(token: string, refreshToken?: string): Promise<void> {
         try {
-            await this.setToken(token);
+            await this.setToken(token, refreshToken);
 
             // Link device to user
             await this.api.linkDevice(this.getDeviceId());

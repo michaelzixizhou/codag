@@ -14,16 +14,38 @@ security = HTTPBearer()
 users_db: dict[str, dict] = {}
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return pwd_context.verify(plain_password[:72], hashed_password)
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    # Truncate to 72 bytes - bcrypt limitation
+    return pwd_context.hash(password[:72])
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
+def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create a refresh token with longer expiration (7 days)"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(days=7))
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+
+def decode_refresh_token(token: str) -> TokenData:
+    """Decode and validate a refresh token"""
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        email: str = payload.get("sub")
+        user_id: str = payload.get("user_id")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return TokenData(email=email, user_id=user_id)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
 def decode_token(token: str) -> TokenData:
     try:

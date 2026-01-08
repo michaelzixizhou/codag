@@ -220,6 +220,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const api = new APIClient(apiUrl, outputChannel);
     const auth = new AuthManager(context, api);
+    
+    // Set auth refresh callback to handle 401 responses
+    api.setAuthRefreshCallback(() => auth.refreshAccessToken());
+    
     await auth.initialize(); // Load token from secure storage
     const cache = new CacheManager(context);
     const webview = new WebviewManager(context);
@@ -234,12 +238,13 @@ export async function activate(context: vscode.ExtensionContext) {
             if (uri.path === '/auth/callback') {
                 const params = new URLSearchParams(uri.query);
                 const token = params.get('token');
+                const refreshToken = params.get('refreshToken');
                 const error = params.get('error');
 
                 if (error) {
                     auth.handleOAuthError(error);
                 } else if (token) {
-                    auth.handleOAuthCallback(token);
+                    auth.handleOAuthCallback(token, refreshToken || undefined);
                 }
             }
         }

@@ -44,6 +44,7 @@ class UserDB(Base):
     is_paid = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login_at = Column(DateTime, nullable=True)
+    refresh_token = Column(String(500), nullable=True)  # Encrypted refresh token
 
     # Relationship to linked trial devices
     devices = relationship("TrialDeviceDB", back_populates="user")
