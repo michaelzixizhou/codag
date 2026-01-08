@@ -67,8 +67,13 @@ export function updateAuthUI(): void {
         userProfileBtn?.classList.add('hidden');
 
         if (trialRemaining) {
-            const remaining = Math.max(0, currentAuthState.remainingAnalyses);
-            trialRemaining.textContent = `${remaining}/${CONFIG.TRIAL.TOTAL_ANALYSES}`;
+            // -1 means unlimited (development mode)
+            if (currentAuthState.remainingAnalyses === -1) {
+                trialRemaining.textContent = `∞/${CONFIG.TRIAL.TOTAL_ANALYSES}`;
+            } else {
+                const remaining = Math.max(0, currentAuthState.remainingAnalyses);
+                trialRemaining.textContent = `${remaining}/${CONFIG.TRIAL.TOTAL_ANALYSES}`;
+            }
         }
     }
 }
