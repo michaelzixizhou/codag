@@ -2,7 +2,7 @@
 
 setup: db-setup
 	@echo "Setting up backend..."
-	cd backend && python3 -m venv venv && \
+	cd backend && python3.11 -m venv venv && \
 		./venv/bin/pip install -r requirements.txt
 	@if [ ! -f backend/.env ]; then \
 		cp backend/.env.example backend/.env 2>/dev/null || echo "SECRET_KEY=dev-secret-change-in-prod\nGEMINI_API_KEY=your-key-here\nDATABASE_URL=postgresql+asyncpg://localhost/codag" > backend/.env; \
@@ -28,7 +28,7 @@ run:
 	@echo "Compiling frontend..."
 	cd frontend && npm run compile
 	@echo "Starting backend..."
-	@cd backend && ./venv/bin/python main.py > ../backend.log 2>&1 & echo $$! > ../backend.pid && \
+	@cd backend && ./venv/bin/python3.11 main.py > ../backend.log 2>&1 & echo $$! > ../backend.pid && \
 		echo "Backend running on port 8000 (PID: $$!)"
 	@sleep 2
 	@echo "Launching VSCode extension..."
