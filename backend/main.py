@@ -7,6 +7,7 @@ from sqlalchemy import select
 from typing import Optional, Callable, Awaitable, Any
 import json
 import uuid
+import datetime
 
 from models import (
     UserCreate, UserLogin, Token, User, AnalyzeRequest, WorkflowGraph,
@@ -36,6 +37,9 @@ from config import settings
 
 # OAuth callback URI for VSCode extension
 VSCODE_CALLBACK_URI = "vscode://codag.codag/auth/callback"
+
+# Track batch usage per device for trial mode (resets daily)
+_batch_usage: dict[tuple[str, str], datetime.date] = {}
 
 app = FastAPI(title="Codag")
 
@@ -287,6 +291,7 @@ async def analyze_workflow(
     request: AnalyzeRequest,
     response: Response,
     x_device_id: Optional[str] = Header(None),
+    x_batch_id: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
@@ -297,8 +302,43 @@ async def analyze_workflow(
     - X-Device-ID header: Trial mode (5 analyses/day)
     - Authorization: Bearer <token>: Authenticated mode (unlimited)
     """
-    # TEMPORARY: Disable auth/trial checks for development
-    remaining_analyses = -1  # -1 means unlimited
+    # Determine remaining analyses and enforce limits
+    remaining_analyses: int
+
+    if settings.dev_mode:
+        # Dev mode bypasses auth/trial and reports unlimited
+        remaining_analyses = -1
+    elif authorization and authorization.startswith("Bearer "):
+        # Authenticated users have unlimited analyses
+        remaining_analyses = -1
+    elif x_device_id:
+        # Trial device: allow one decrement per batch ID per day
+        today = datetime.date.today()
+
+        # Get current device status without consuming
+        device, remaining_before = await get_or_create_trial_device(db, x_device_id)
+
+        if x_batch_id:
+            key = (x_device_id, x_batch_id)
+            last_used = _batch_usage.get(key)
+
+            if last_used == today:
+                # Already charged for this batch today; report current remaining
+                remaining_analyses = remaining_before
+            else:
+                if remaining_before <= 0:
+                    raise HTTPException(status_code=429, detail="Trial quota exhausted")
+                _batch_usage[key] = today
+                remaining_analyses = await increment_trial_usage(db, x_device_id)
+        else:
+            # No batch ID provided; charge per request
+            try:
+                remaining_analyses = await increment_trial_usage(db, x_device_id)
+            except ValueError:
+                # Quota exhausted for this device
+                raise HTTPException(status_code=429, detail="Trial quota exhausted")
+    else:
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     # Input validation
     MAX_CODE_SIZE = 5_000_000  # 5MB limit
@@ -403,6 +443,9 @@ async def analyze_workflow(
                 print(f"DEBUG: Workflow '{wf.get('name')}' ({node_count} nodes) has {len(components)} components: {[c.get('name') for c in components]}")
             else:
                 print(f"DEBUG: Workflow '{wf.get('name')}' ({node_count} nodes) - NO COMPONENTS")
+
+        # Expose remaining analyses to frontend (used to render trial badge)
+        response.headers["X-Remaining-Analyses"] = str(remaining_analyses)
 
         return WorkflowGraph(**graph_data)
     except HTTPException:

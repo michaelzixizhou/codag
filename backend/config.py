@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     free_trial_requests_per_day: int = 5  # Trial users: 5/day
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
+    dev_mode: bool = True  # When true, bypasses auth/trial limits
 
     # Database
     database_url: str = "postgresql+asyncpg://localhost/codag"

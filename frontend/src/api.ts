@@ -148,7 +148,8 @@ export class APIClient {
         code: string,
         filePaths: string[],
         frameworkHint?: string,
-        metadata?: FileMetadata[]
+        metadata?: FileMetadata[],
+        batchId?: string
     ): Promise<AnalyzeResult> {
         try {
             const res = await this.client.post('/analyze', {
@@ -156,6 +157,8 @@ export class APIClient {
                 file_paths: filePaths,
                 framework_hint: frameworkHint,
                 metadata: metadata || []
+            }, {
+                headers: batchId ? { 'X-Batch-ID': batchId } : undefined
             });
 
             // Extract remaining analyses from response header
@@ -187,9 +190,10 @@ export class APIClient {
         code: string,
         filePaths: string[],
         frameworkHint?: string,
-        metadata?: FileMetadata[]
+        metadata?: FileMetadata[],
+        batchId?: string
     ): Promise<WorkflowGraph> {
-        const result = await this.analyzeWorkflow(code, filePaths, frameworkHint, metadata);
+        const result = await this.analyzeWorkflow(code, filePaths, frameworkHint, metadata, batchId);
         return result.graph;
     }
 }
