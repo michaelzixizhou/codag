@@ -45,4 +45,12 @@ export const CONFIG = {
         /** Maximum depth to follow when expanding imports */
         MAX_DEPTH: 3,
     },
+
+    /**
+     * Trial and auth defaults
+     */
+    TRIAL: {
+        /** Total free analyses available to trial users */
+        TOTAL_ANALYSES: 5,
+    },
 } as const;

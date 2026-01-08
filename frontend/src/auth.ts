@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { APIClient } from './api';
+import { CONFIG } from './config';
 import { AuthState, OAuthProvider } from './types';
 
 // Re-export for backwards compatibility
@@ -12,7 +13,7 @@ export class AuthManager {
     private authState: AuthState = {
         isAuthenticated: false,
         isTrial: true,
-        remainingAnalyses: 5,
+        remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES,
     };
 
     // Callback to notify webview of auth state changes
@@ -92,14 +93,13 @@ export class AuthManager {
                 this.authState = {
                     isAuthenticated: false,
                     isTrial: true,
-                    remainingAnalyses: 5,
+                    remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES,
                     user: undefined,
                 };
                 await this.context.globalState.update(AuthManager.AUTH_STATE_KEY, this.authState);
             }
         }
     }
-
     /**
      * Handle token changes from other windows.
      */
@@ -131,7 +131,7 @@ export class AuthManager {
             this.authState = {
                 isAuthenticated: false,
                 isTrial: true,
-                remainingAnalyses: 5,
+                remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES,
                 user: undefined,
             };
             await this.saveAuthState();
@@ -235,7 +235,7 @@ export class AuthManager {
                     this.authState = {
                         isAuthenticated: false,
                         isTrial: true,
-                        remainingAnalyses: 5,
+                        remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES,
                         user: undefined,
                     };
                 }
@@ -338,7 +338,7 @@ export class AuthManager {
         this.authState = {
             isAuthenticated: false,
             isTrial: true,
-            remainingAnalyses: 5,
+            remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES,
             user: undefined,
         };
 

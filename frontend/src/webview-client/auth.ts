@@ -1,6 +1,7 @@
 /**
  * Auth panel and trial status management for webview.
  */
+import { CONFIG } from '../config';
 import * as state from './state';
 
 export interface AuthState {
@@ -20,7 +21,7 @@ export interface AuthState {
 let currentAuthState: AuthState = {
     isAuthenticated: false,
     isTrial: true,
-    remainingAnalyses: 5
+    remainingAnalyses: CONFIG.TRIAL.TOTAL_ANALYSES
 };
 
 /**
@@ -67,7 +68,7 @@ export function updateAuthUI(): void {
 
         if (trialRemaining) {
             const remaining = Math.max(0, currentAuthState.remainingAnalyses);
-            trialRemaining.textContent = `${remaining}/5`;
+            trialRemaining.textContent = `${remaining}/${CONFIG.TRIAL.TOTAL_ANALYSES}`;
         }
     }
 }
