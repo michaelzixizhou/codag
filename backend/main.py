@@ -43,6 +43,26 @@ VSCODE_CALLBACK_URI = "vscode://codag.codag/auth/callback"
 
 # Track batch usage per device for trial mode (resets daily)
 _batch_usage: dict[tuple[str, str], datetime.date] = {}
+_last_cleanup_date: Optional[datetime.date] = None
+
+
+def cleanup_old_batch_usage():
+    """Remove batch usage entries older than today to prevent memory leak."""
+    global _last_cleanup_date
+    today = datetime.date.today()
+    
+    # Only run cleanup once per day
+    if _last_cleanup_date == today:
+        return
+    
+    # Remove all entries that are not from today
+    keys_to_remove = [key for key, date in _batch_usage.items() if date < today]
+    for key in keys_to_remove:
+        del _batch_usage[key]
+    
+    _last_cleanup_date = today
+    if keys_to_remove:
+        print(f"[Cleanup] Removed {len(keys_to_remove)} old batch usage entries")
 
 app = FastAPI(title="Codag")
 
@@ -377,6 +397,9 @@ async def analyze_workflow(
     elif x_device_id:
         # Trial device: allow one decrement per batch ID per day
         today = datetime.date.today()
+        
+        # Clean up old batch usage entries
+        cleanup_old_batch_usage()
 
         # Get current device status without consuming
         device, remaining_before = await get_or_create_trial_device(db, x_device_id)
