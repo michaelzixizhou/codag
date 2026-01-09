@@ -4,6 +4,8 @@ import { getNodeWorkflowCount, generateEdgePath, getNodeOrCollapsedGroup, getVir
 import { renderMinimap } from './minimap';
 import { getNodeDimensions, positionTooltipNearMouse } from './helpers';
 import { measureTextWidth } from './groups';
+import { setPreference, getPreference, updatePreferenceUI } from './preferences';
+import { createDropdown } from './dropdown';
 import {
     NODE_WIDTH, NODE_HEIGHT, NODE_HALF_WIDTH,
     COLLAPSED_GROUP_HALF_WIDTH, COLLAPSED_GROUP_HALF_HEIGHT,
@@ -15,6 +17,8 @@ import {
 
 declare const d3: any;
 
+let settingsDropdown: any = null;
+
 export function setupControls(updateGroupVisibility: () => void): void {
     // Attach click handlers via addEventListener
     document.getElementById('btn-zoom-in')?.addEventListener('click', zoomIn);
@@ -25,8 +29,33 @@ export function setupControls(updateGroupVisibility: () => void): void {
     document.getElementById('btn-analyze')?.addEventListener('click', openAnalyzePanel);
     document.getElementById('legend-header')?.addEventListener('click', toggleLegend);
 
+    // Setup settings dropdown
+    settingsDropdown = createDropdown('btn-settings', 'settings-dropdown');
+
+    // Setup preference toggles
+    setupPreferenceToggles();
+
     // Setup button tooltips
     setupButtonTooltips();
+}
+
+/**
+ * Setup preference toggle switches
+ */
+function setupPreferenceToggles(): void {
+    // High contrast toggle
+    const highContrastToggle = document.getElementById('toggle-high-contrast') as HTMLInputElement;
+    if (highContrastToggle) {
+        // Initialize from current preference
+        highContrastToggle.checked = getPreference('highContrastUI');
+        updatePreferenceUI();
+
+        // Handle toggle change
+        highContrastToggle.addEventListener('change', () => {
+            setPreference('highContrastUI', highContrastToggle.checked);
+            updatePreferenceUI();
+        });
+    }
 }
 
 function openAnalyzePanel(): void {
@@ -75,15 +104,27 @@ function zoomOut(): void {
 }
 
 function setupButtonTooltips(): void {
-    const tooltips = ['Zoom In', 'Zoom Out', 'Fit to Screen', 'Expand/Collapse All Workflows', 'Reset Layout', 'Analyze Files'];
+    // Map of button IDs to tooltip text
+    const tooltipMap: Record<string, string> = {
+        'btn-zoom-in': 'Zoom In',
+        'btn-zoom-out': 'Zoom Out',
+        'btn-fit-screen': 'Fit to Screen',
+        'btn-expand-all': 'Expand/Collapse All Workflows',
+        'btn-format': 'Reset Layout',
+        'btn-analyze': 'Analyze Files',
+        'btn-settings': 'Settings'
+    };
 
-    document.querySelectorAll('#controls button').forEach((btn, index) => {
-        btn.addEventListener('mouseenter', (e) => showButtonTooltip(e as MouseEvent, tooltips[index]));
-        btn.addEventListener('mousemove', (e) => {
-            const tooltip = document.getElementById('buttonTooltip');
-            if (tooltip) positionTooltipNearMouse(tooltip, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
-        });
-        btn.addEventListener('mouseleave', hideButtonTooltip);
+    Object.entries(tooltipMap).forEach(([id, tooltip]) => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('mouseenter', (e) => showButtonTooltip(e as MouseEvent, tooltip));
+            btn.addEventListener('mousemove', (e) => {
+                const tooltipEl = document.getElementById('buttonTooltip');
+                if (tooltipEl) positionTooltipNearMouse(tooltipEl, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+            });
+            btn.addEventListener('mouseleave', hideButtonTooltip);
+        }
     });
 }
 

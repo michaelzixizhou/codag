@@ -123,6 +123,197 @@ body {
     height: 16px;
     fill: currentColor;
 }
+#controls button.settings-btn {
+    color: #607D8B;
+}
+#controls button.settings-btn:hover {
+    background: rgba(96, 125, 139, 0.1);
+    border-color: #607D8B;
+}
+
+/* Control Divider */
+.control-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--vscode-panel-border);
+    margin: 0 4px;
+}
+
+/* Settings Dropdown */
+.settings-dropdown {
+    position: fixed;
+    top: 44px;
+    right: 16px;
+    background: var(--vscode-dropdown-background);
+    border: 1px solid var(--vscode-dropdown-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    z-index: 2000;
+    min-width: 200px;
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.settings-dropdown.hidden {
+    opacity: 0;
+    transform: translateY(-8px);
+    pointer-events: none;
+}
+
+.dropdown-section {
+    padding: 8px 0;
+}
+
+.dropdown-section + .dropdown-section {
+    border-top: 1px solid var(--vscode-dropdown-border);
+}
+
+.dropdown-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: background-color 0.1s ease;
+}
+
+.dropdown-item:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.dropdown-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    cursor: pointer;
+}
+
+.dropdown-label-text {
+    font-size: 13px;
+    color: var(--vscode-dropdown-foreground);
+}
+
+/* Toggle Switch in Dropdown */
+.dropdown-item .toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.dropdown-item .toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.dropdown-item .toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--vscode-input-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 18px;
+    transition: all 0.2s ease;
+}
+
+.dropdown-item .toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 12px;
+    width: 12px;
+    left: 2px;
+    bottom: 2px;
+    background-color: var(--vscode-foreground);
+    opacity: 0.5;
+    border-radius: 50%;
+    transition: all 0.2s ease;
+}
+
+.dropdown-item .toggle-switch input:checked + .toggle-slider {
+    background-color: rgba(255, 193, 7, 0.2);
+    border-color: #FFC107;
+}
+
+.dropdown-item .toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(14px);
+    background-color: #FFC107;
+    opacity: 1;
+}
+
+.dropdown-item .toggle-switch:hover .toggle-slider {
+    border-color: var(--vscode-focusBorder);
+}
+
+/* High Contrast Mode */
+body.high-contrast {
+    --hc-border: 2px solid var(--vscode-contrastBorder, #fff);
+}
+
+body.high-contrast .node rect,
+body.high-contrast .collapsed-group-node rect {
+    stroke-width: 2px !important;
+}
+
+body.high-contrast .group-background {
+    stroke-width: 2px !important;
+}
+
+/* Text Contrast - Panel and Top Bar Only */
+body.high-contrast #header {
+    border-bottom: 2px solid var(--vscode-contrastBorder, rgba(255,255,255,0.3));
+}
+
+body.high-contrast .snapshot-stats {
+    color: var(--vscode-foreground) !important;
+    opacity: 1 !important;
+}
+
+body.high-contrast .snapshot-stats .stat-label {
+    opacity: 1 !important;
+}
+
+body.high-contrast .side-panel h2 {
+    color: var(--vscode-foreground) !important;
+    font-weight: 600 !important;
+}
+
+body.high-contrast .side-panel label {
+    color: var(--vscode-foreground) !important;
+    font-weight: 600 !important;
+}
+
+body.high-contrast .side-panel p {
+    color: var(--vscode-foreground) !important;
+}
+
+body.high-contrast .panel-section {
+    color: var(--vscode-foreground) !important;
+}
+
+body.high-contrast .type-badge {
+    color: var(--vscode-foreground) !important;
+}
+
+body.high-contrast .source-link {
+    color: var(--vscode-foreground) !important;
+}
+
+/* UI Elements */
+body.high-contrast #controls button {
+    border: 1px solid var(--vscode-contrastBorder, rgba(255,255,255,0.3));
+}
+
+body.high-contrast .workflow-directory {
+    border: 2px solid var(--vscode-contrastBorder, rgba(255,255,255,0.3));
+}
+
+body.high-contrast .side-panel {
+    border-left: 2px solid var(--vscode-contrastBorder, rgba(255,255,255,0.3));
+}
 
 /* Auth Section */
 .auth-section {

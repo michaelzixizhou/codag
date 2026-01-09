@@ -14,6 +14,7 @@ import { updateGroupVisibility } from './visibility';
 import { populateDirectory, focusOnWorkflow } from './directory';
 import { getFilePicker } from './file-picker';
 import { setAuthState, openAuthPanel, AuthState } from './auth';
+import { initPreferencesFromExtension, updatePreferenceUI } from './preferences';
 
 declare const d3: any;
 
@@ -355,6 +356,14 @@ export function setupMessageHandler(): void {
                         indicator.classList.add('hidden');
                         setTimeout(() => indicator.style.display = 'none', 300);
                     }, 2000);
+                }
+                break;
+
+            case 'updatePreferences':
+                // Update preferences from extension settings
+                if (message.preferences) {
+                    initPreferencesFromExtension(message.preferences);
+                    updatePreferenceUI();
                 }
                 break;
         }
