@@ -362,7 +362,7 @@ async def analyze_workflow(
     Analyze code for LLM workflow patterns.
 
     Authentication:
-    - X-Device-ID header: Trial mode (5 analyses/day)
+    - X-Device-ID header: Trial mode (limited analyses per day, see settings.free_trial_requests_per_day)
     - Authorization: Bearer <token>: Authenticated mode (unlimited)
     """
     # Determine remaining analyses and enforce limits
