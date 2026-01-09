@@ -10,13 +10,11 @@ import uuid
 import datetime
 
 from models import (
-    UserCreate, UserLogin, Token, User, AnalyzeRequest, WorkflowGraph,
+    Token, User, AnalyzeRequest, WorkflowGraph,
     DeviceCheckRequest, DeviceCheckResponse, DeviceLinkRequest,
     OAuthUser, AuthStateResponse, RefreshTokenRequest
 )
 from auth import (
-    get_password_hash,
-    verify_password,
     create_access_token,
     decode_token,
     create_refresh_token,
@@ -330,39 +328,6 @@ async def refresh_token(
         raise
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-
-
-# =============================================================================
-# Legacy Auth Endpoints (kept for backwards compatibility)
-# =============================================================================
-
-@app.post("/auth/register", response_model=Token)
-async def register(user: UserCreate):
-    if user.email in users_db:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    users_db[user.email] = {
-        "email": user.email,
-        "hashed_password": get_password_hash(user.password),
-        "is_paid": False,
-        "requests_today": 0,
-        "last_request_date": None
-    }
-
-    access_token = create_access_token({"sub": user.email})
-    refresh_token = create_refresh_token({"sub": user.email})
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
-
-
-@app.post("/auth/login", response_model=Token)
-async def login(user: UserLogin):
-    user_data = users_db.get(user.email)
-    if not user_data or not verify_password(user.password, user_data["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    access_token = create_access_token({"sub": user.email})
-    refresh_token = create_refresh_token({"sub": user.email})
-    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 
 # =============================================================================
