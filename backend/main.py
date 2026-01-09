@@ -25,6 +25,8 @@ from database import (
     get_db, init_db,
     get_or_create_trial_device, increment_trial_usage,
     get_or_create_user, link_device_to_user,
+    check_and_record_batch_usage,
+    store_refresh_token, validate_refresh_token, invalidate_refresh_tokens,
     UserDB
 )
 from migrations import run_migrations
@@ -39,29 +41,6 @@ from config import settings
 # OAuth callback URI for VSCode extension
 VSCODE_CALLBACK_URI = "vscode://codag.codag/auth/callback"
 
-# Track batch usage per device for trial mode (resets daily)
-_batch_usage: dict[tuple[str, str], datetime.date] = {}
-_last_cleanup_date: Optional[datetime.date] = None
-
-
-def cleanup_old_batch_usage():
-    """Remove batch usage entries older than today to prevent memory leak."""
-    global _last_cleanup_date
-    today = datetime.date.today()
-    
-    # Only run cleanup once per day
-    if _last_cleanup_date == today:
-        return
-    
-    # Remove all entries that are not from today
-    keys_to_remove = [key for key, date in _batch_usage.items() if date < today]
-    for key in keys_to_remove:
-        del _batch_usage[key]
-    
-    _last_cleanup_date = today
-    if keys_to_remove:
-        print(f"[Cleanup] Removed {len(keys_to_remove)} old batch usage entries")
-
 app = FastAPI(title="Codag")
 
 # Add session middleware for OAuth state
@@ -72,7 +51,7 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins_list,  # Configured origins, not wildcard
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,20 +124,30 @@ async def _handle_oauth_callback(
             provider_id=user_info['provider_id'],
         )
 
-        # Generate access and refresh tokens
+        # Generate access token
         jwt_access_token = create_access_token({
             "sub": user.email,
             "user_id": str(user.id)
         })
 
+        # Generate refresh token with new token family
+        # Token family will be stored in DB for rotation tracking
         jwt_refresh_token = create_refresh_token({
             "sub": user.email,
             "user_id": str(user.id)
         })
 
-        # Store refresh token in database
-        user.refresh_token = jwt_refresh_token
-        await db.commit()
+        # Store hashed refresh token in database (secure)
+        token_family = await store_refresh_token(db, user.id, jwt_refresh_token)
+        
+        # Re-generate refresh token with family ID embedded
+        jwt_refresh_token = create_refresh_token({
+            "sub": user.email,
+            "user_id": str(user.id)
+        }, token_family=str(token_family))
+        
+        # Update stored hash with final token
+        await store_refresh_token(db, user.id, jwt_refresh_token, token_family)
 
         return RedirectResponse(
             url=f"{VSCODE_CALLBACK_URI}?token={jwt_access_token}&refreshToken={jwt_refresh_token}",
@@ -288,20 +277,45 @@ async def refresh_token(
     request: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Refresh access token using refresh token."""
+    """Refresh access token using refresh token with secure rotation."""
     try:
+        # Decode and validate refresh token
         token_data = decode_refresh_token(request.refresh_token)
 
         if not token_data.user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
 
+        # Get token family from JWT claims
+        from jose import jwt
+        payload = jwt.decode(
+            request.refresh_token,
+            settings.secret_key,
+            algorithms=[settings.algorithm],
+            options={"verify_signature": False}  # Already validated in decode_refresh_token
+        )
+        token_family_str = payload.get("family")
+        
+        if not token_family_str:
+            raise HTTPException(status_code=401, detail="Invalid token format")
+        
+        token_family = uuid.UUID(token_family_str)
+
+        # Validate refresh token against database hash
+        user_id = uuid.UUID(token_data.user_id)
+        is_valid = await validate_refresh_token(db, user_id, request.refresh_token, token_family)
+        
+        if not is_valid:
+            # Token reuse detected - invalidate all tokens for this user
+            await invalidate_refresh_tokens(db, user_id)
+            raise HTTPException(status_code=401, detail="Token reuse detected - all sessions invalidated")
+
         result = await db.execute(
-            select(UserDB).where(UserDB.id == uuid.UUID(token_data.user_id))
+            select(UserDB).where(UserDB.id == user_id)
         )
         user = result.scalar_one_or_none()
 
-        if not user or user.refresh_token != request.refresh_token:
-            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
 
         # Generate new access token
         new_access_token = create_access_token({
@@ -309,15 +323,14 @@ async def refresh_token(
             "user_id": str(user.id)
         })
 
-        # Generate new refresh token
+        # Generate new refresh token with SAME family (rotation)
         new_refresh_token = create_refresh_token({
             "sub": user.email,
             "user_id": str(user.id)
-        })
+        }, token_family=str(token_family))
 
-        # Store new refresh token
-        user.refresh_token = new_refresh_token
-        await db.commit()
+        # Store new hashed refresh token (invalidates old one)
+        await store_refresh_token(db, user.id, new_refresh_token, token_family)
 
         return {
             "access_token": new_access_token,
@@ -361,25 +374,20 @@ async def analyze_workflow(
         remaining_analyses = -1
     elif x_device_id:
         # Trial device: allow one decrement per batch ID per day
-        today = datetime.date.today()
-        
-        # Clean up old batch usage entries
-        cleanup_old_batch_usage()
-
         # Get current device status without consuming
         device, remaining_before = await get_or_create_trial_device(db, x_device_id)
 
         if x_batch_id:
-            key = (x_device_id, x_batch_id)
-            last_used = _batch_usage.get(key)
+            # Check if this batch was already used today (using database)
+            already_used = await check_and_record_batch_usage(db, x_device_id, x_batch_id)
 
-            if last_used == today:
+            if already_used:
                 # Already charged for this batch today; report current remaining
                 remaining_analyses = remaining_before
             else:
+                # New batch usage for today
                 if remaining_before <= 0:
                     raise HTTPException(status_code=429, detail="Trial quota exhausted")
-                _batch_usage[key] = today
                 remaining_analyses = await increment_trial_usage(db, x_device_id)
         else:
             # No batch ID provided; charge per request

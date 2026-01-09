@@ -2,7 +2,7 @@
 Database module for Codag authentication and trial tracking.
 Uses async SQLAlchemy with PostgreSQL.
 """
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
 import uuid
 
@@ -42,9 +42,13 @@ class UserDB(Base):
     provider = Column(String(50), nullable=False)  # 'github' | 'google'
     provider_id = Column(String(255), nullable=False)
     is_paid = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_login_at = Column(DateTime, nullable=True)
-    refresh_token = Column(String(500), nullable=True)  # Encrypted refresh token
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Secure refresh token storage
+    hashed_refresh_token = Column(String(255), nullable=True)  # SHA-256 hash of refresh token
+    token_family = Column(UUID(as_uuid=True), nullable=True)  # For rotation tracking
+    token_version = Column(Integer, default=0)  # Increment on rotation to invalidate old tokens
 
     # Relationship to linked trial devices
     devices = relationship("TrialDeviceDB", back_populates="user")
@@ -62,11 +66,26 @@ class TrialDeviceDB(Base):
     machine_id = Column(String(255), unique=True, nullable=False, index=True)
     analyses_today = Column(Integer, default=0)
     last_analysis_date = Column(Date, nullable=True)
-    first_seen_at = Column(DateTime, default=datetime.utcnow)
+    first_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Optional link to user after OAuth signup
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     user = relationship("UserDB", back_populates="devices")
+
+
+class BatchUsageDB(Base):
+    """Track batch IDs to prevent multiple analyses for same batch."""
+    __tablename__ = "batch_usage"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    machine_id = Column(String(255), nullable=False, index=True)
+    batch_id = Column(String(255), nullable=False)
+    usage_date = Column(Date, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint('machine_id', 'batch_id', 'usage_date', name='uq_batch_usage_per_day'),
+    )
 
 
 async def get_db():
@@ -189,7 +208,7 @@ async def get_or_create_user(
             )
             session.add(user)
 
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
     if name and not user.name:
         user.name = name
 
@@ -220,3 +239,188 @@ async def link_device_to_user(
         await session.refresh(device)
 
     return device
+
+
+async def check_and_record_batch_usage(
+    session: AsyncSession,
+    machine_id: str,
+    batch_id: str
+) -> bool:
+    """Check if a batch was already used today and record it if not.
+    
+    Args:
+        session: Database session
+        machine_id: Device machine ID
+        batch_id: Unique batch identifier
+    
+    Returns:
+        True if batch was already used today, False if this is first use
+    """
+    from sqlalchemy import select
+    
+    today = date.today()
+    
+    # Check if this batch was already used today
+    result = await session.execute(
+        select(BatchUsageDB).where(
+            BatchUsageDB.machine_id == machine_id,
+            BatchUsageDB.batch_id == batch_id,
+            BatchUsageDB.usage_date == today
+        )
+    )
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        return True  # Already used today
+    
+    # Record this batch usage
+    batch_usage = BatchUsageDB(
+        machine_id=machine_id,
+        batch_id=batch_id,
+        usage_date=today
+    )
+    session.add(batch_usage)
+    await session.commit()
+    
+    return False  # First use today
+
+
+async def cleanup_old_batch_usage(
+    session: AsyncSession,
+    days_to_keep: int = 7
+) -> int:
+    """Clean up batch usage records older than specified days.
+    
+    Args:
+        session: Database session
+        days_to_keep: Number of days of history to keep
+    
+    Returns:
+        Number of records deleted
+    """
+    from sqlalchemy import delete
+    from datetime import timedelta
+    
+    cutoff_date = date.today() - timedelta(days=days_to_keep)
+    
+    result = await session.execute(
+        delete(BatchUsageDB).where(BatchUsageDB.usage_date < cutoff_date)
+    )
+    await session.commit()
+    
+    return result.rowcount
+
+
+def hash_refresh_token(token: str) -> str:
+    """Hash a refresh token using SHA-256.
+    
+    Args:
+        token: The raw refresh token string
+    
+    Returns:
+        Hex-encoded SHA-256 hash
+    """
+    import hashlib
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def store_refresh_token(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    refresh_token: str,
+    token_family: Optional[uuid.UUID] = None
+) -> uuid.UUID:
+    """Store a hashed refresh token for a user.
+    
+    Args:
+        session: Database session
+        user_id: User's ID
+        refresh_token: The raw refresh token to hash and store
+        token_family: Optional existing family ID for rotation
+    
+    Returns:
+        Token family ID (new or existing)
+    """
+    from sqlalchemy import select
+    
+    result = await session.execute(
+        select(UserDB).where(UserDB.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise ValueError("User not found")
+    
+    # Generate new token family if not provided
+    if token_family is None:
+        token_family = uuid.uuid4()
+    
+    # Hash and store
+    user.hashed_refresh_token = hash_refresh_token(refresh_token)
+    user.token_family = token_family
+    user.token_version += 1
+    
+    await session.commit()
+    await session.refresh(user)
+    
+    return token_family
+
+
+async def validate_refresh_token(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    refresh_token: str,
+    expected_family: uuid.UUID
+) -> bool:
+    """Validate a refresh token against stored hash.
+    
+    Args:
+        session: Database session
+        user_id: User's ID
+        refresh_token: The raw refresh token to validate
+        expected_family: Expected token family (from JWT claims)
+    
+    Returns:
+        True if token is valid, False otherwise
+    """
+    from sqlalchemy import select
+    
+    result = await session.execute(
+        select(UserDB).where(UserDB.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user or not user.hashed_refresh_token:
+        return False
+    
+    # Check token family matches (prevents token reuse)
+    if user.token_family != expected_family:
+        return False
+    
+    # Validate hash
+    token_hash = hash_refresh_token(refresh_token)
+    return token_hash == user.hashed_refresh_token
+
+
+async def invalidate_refresh_tokens(
+    session: AsyncSession,
+    user_id: uuid.UUID
+) -> None:
+    """Invalidate all refresh tokens for a user (e.g., on logout).
+    
+    Args:
+        session: Database session
+        user_id: User's ID
+    """
+    from sqlalchemy import select
+    
+    result = await session.execute(
+        select(UserDB).where(UserDB.id == user_id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if user:
+        user.hashed_refresh_token = None
+        user.token_family = None
+        user.token_version += 1
+        await session.commit()
