@@ -220,6 +220,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const api = new APIClient(apiUrl, outputChannel);
     const auth = new AuthManager(context, api);
+    
+    // Set auth refresh callback to handle 401 responses
+    api.setAuthRefreshCallback(() => auth.refreshAccessToken());
+    
     await auth.initialize(); // Load token from secure storage
     const cache = new CacheManager(context);
     const webview = new WebviewManager(context);
@@ -234,12 +238,13 @@ export async function activate(context: vscode.ExtensionContext) {
             if (uri.path === '/auth/callback') {
                 const params = new URLSearchParams(uri.query);
                 const token = params.get('token');
+                const refreshToken = params.get('refreshToken');
                 const error = params.get('error');
 
                 if (error) {
                     auth.handleOAuthError(error);
                 } else if (token) {
-                    auth.handleOAuthCallback(token);
+                    auth.handleOAuthCallback(token, refreshToken || undefined);
                 }
             }
         }
@@ -519,7 +524,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                 const result = await api.analyzeWorkflow(content, [filePath], framework || undefined, [metadata]);
                 graph = result.graph;
-                if (result.remainingAnalyses >= 0) {
+                if (typeof result.remainingAnalyses === 'number') {
                     await auth.updateRemainingAnalyses(result.remainingAnalyses);
                 }
 
@@ -605,6 +610,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     async function analyzeSelectedFiles(selectedPaths: string[], bypassCache: boolean = false) {
         const startTime = Date.now();
+        const batchId = `batch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
         try {
             webview.showLoading('Analyzing selected files...');
@@ -675,11 +681,12 @@ export async function activate(context: vscode.ExtensionContext) {
                             combinedCode,
                             batch.map(f => f.path),
                             framework || undefined,
-                            batchMetadata
+                            batchMetadata,
+                            batchId
                         );
 
                         const graph = analyzeResult.graph;
-                        if (analyzeResult.remainingAnalyses >= 0) {
+                        if (typeof analyzeResult.remainingAnalyses === 'number') {
                             await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
                         }
 
@@ -740,6 +747,7 @@ export async function activate(context: vscode.ExtensionContext) {
     async function analyzeWorkspace(bypassCache: boolean = false) {
         // Track analysis start time
         const startTime = Date.now();
+        const batchId = `batch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
         log('Starting workspace scan...');
         log(`Workspace root: ${vscode.workspace.workspaceFolders?.[0]?.uri.fsPath}`);
@@ -883,10 +891,11 @@ export async function activate(context: vscode.ExtensionContext) {
                                         combinedCode,
                                         batchPaths,
                                         framework || undefined,
-                                        batchMetadata
+                                        batchMetadata,
+                                        batchId
                                     );
                                     const graph = analyzeResult.graph;
-                                    if (analyzeResult.remainingAnalyses >= 0) {
+                                    if (typeof analyzeResult.remainingAnalyses === 'number') {
                                         await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
                                     }
 
@@ -1197,10 +1206,11 @@ export async function activate(context: vscode.ExtensionContext) {
                                 combinedBatchCode,
                                 batchPaths,
                                 framework || undefined,
-                                batchMetadata
+                                batchMetadata,
+                                batchId
                             );
                             const batchGraph = batchResult.graph;
-                            if (batchResult.remainingAnalyses >= 0) {
+                            if (typeof batchResult.remainingAnalyses === 'number') {
                                 await auth.updateRemainingAnalyses(batchResult.remainingAnalyses);
                             }
 
@@ -1245,10 +1255,11 @@ export async function activate(context: vscode.ExtensionContext) {
                                             formatFileXML(file.path, file.content, fileMeta),
                                             [file.path],
                                             framework || undefined,
-                                            fileMeta ? [fileMeta] : []
+                                            fileMeta ? [fileMeta] : [],
+                                            batchId
                                         );
                                         const fileGraph = fileResult.graph;
-                                        if (fileResult.remainingAnalyses >= 0) {
+                                        if (typeof fileResult.remainingAnalyses === 'number') {
                                             await auth.updateRemainingAnalyses(fileResult.remainingAnalyses);
                                         }
 
@@ -1381,7 +1392,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // Analyze single file
             const analyzeResult = await api.analyzeWorkflow(content, [filePath]);
             const result = analyzeResult.graph;
-            if (analyzeResult.remainingAnalyses >= 0) {
+            if (typeof analyzeResult.remainingAnalyses === 'number') {
                 await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
             }
 
@@ -1463,6 +1474,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Read selected files
             const fileContents: { path: string; content: string; }[] = [];
+            const batchId = `batch-${Date.now()}-${Math.random().toString(16).slice(2)}`;
             for (const filePath of selectedPaths) {
                 try {
                     const uri = vscode.Uri.file(filePath);
@@ -1522,11 +1534,12 @@ export async function activate(context: vscode.ExtensionContext) {
                             combinedCode,
                             batchPaths,
                             framework || undefined,
-                            batchMetadata
+                            batchMetadata,
+                            batchId
                         );
                         const batchGraph = batchResult.graph;
 
-                        if (batchResult.remainingAnalyses >= 0) {
+                        if (typeof batchResult.remainingAnalyses === 'number') {
                             await auth.updateRemainingAnalyses(batchResult.remainingAnalyses);
                         }
 

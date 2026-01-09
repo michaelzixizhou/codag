@@ -203,13 +203,15 @@ body {
     position: absolute;
     top: 32px;
     left: 0;
-    width: 240px;
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    width: 260px;
+    background: var(--vscode-menu-background); 
+    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
     z-index: 2000;
     display: none;
+    color: var(--vscode-menu-foreground);
+    padding: 4px 0;
 }
 .user-dropdown.open {
     display: block;
@@ -218,11 +220,11 @@ body {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px;
+    padding: 12px 16px;
 }
 .dropdown-avatar {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     object-fit: cover;
 }
@@ -233,7 +235,7 @@ body {
     flex: 1;
 }
 .dropdown-name {
-    font-weight: 500;
+    font-weight: 600;
     font-size: 13px;
     white-space: nowrap;
     overflow: hidden;
@@ -245,116 +247,155 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    opacity: 0.9;
 }
 .dropdown-divider {
     height: 1px;
-    background: var(--vscode-panel-border);
-    margin: 0 8px;
+    background: var(--vscode-menu-separatorBackground);
+    margin: 4px 0;
+    opacity: 0.4;
 }
 .dropdown-provider {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 12px;
+    padding: 8px 16px;
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
+    opacity: 0.7;
 }
 .dropdown-provider svg {
     width: 14px;
     height: 14px;
 }
 .dropdown-logout {
-    width: calc(100% - 16px);
-    margin: 8px;
-    padding: 8px;
+    width: 100%;
+    margin: 0;
+    padding: 8px 16px;
     background: transparent;
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    color: var(--vscode-foreground);
+    border: none;
+    border-radius: 0;
+    color: var(--vscode-menu-foreground);
     cursor: pointer;
-    font-size: 12px;
+    font-size: 13px;
+    text-align: left;
+    display: block;
 }
 .dropdown-logout:hover {
-    background: var(--vscode-toolbar-hoverBackground);
+    background: var(--vscode-menu-selectionBackground);
+    color: var(--vscode-menu-selectionForeground);
 }
 
 /* Auth Panel */
 .auth-panel {
     position: fixed;
     top: 36px;
-    right: -320px;
-    width: 320px;
+    right: -340px;
+    width: 340px;
     height: calc(100vh - 36px);
     background: var(--vscode-editor-background);
     border-left: 1px solid var(--vscode-panel-border);
-    transition: right 0.3s ease, transform 0.3s ease, opacity 0.3s ease;
+    transition: right 0.3s cubic-bezier(0.2, 0.0, 0.2, 1), transform 0.3s ease, opacity 0.3s ease;
     z-index: 1002;
     display: flex;
     flex-direction: column;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.25);
 }
 .auth-panel.open {
     right: 0;
 }
 .auth-panel.minimizing {
-    transform: scale(0.1) translate(200px, -200px);
-    opacity: 0;
+    right: -340px;
+    transform: none;
+    opacity: 1;
 }
 .auth-panel-header {
     display: flex;
-    justify-content: space-between;
+    justify-content: center;
     align-items: center;
-    padding: 16px;
-    border-bottom: 1px solid var(--vscode-panel-border);
+    padding: 32px 24px 24px 24px;
+    position: relative;
+    border: none;
 }
 .auth-panel-header h2 {
-    font-size: 16px;
+    font-size: 24px;
     font-weight: 500;
+    letter-spacing: -0.03em;
     margin: 0;
+    color: var(--vscode-foreground);
+    text-align: center;
+}
+.auth-panel-header .close-btn {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    opacity: 0.6;
 }
 .auth-panel-content {
-    padding: 24px 16px;
+    padding: 0 24px 32px 24px;
     flex: 1;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
 }
 .auth-description {
-    font-size: 13px;
+    font-size: 14px;
+    line-height: 1.5;
     color: var(--vscode-descriptionForeground);
     margin-bottom: 24px;
     text-align: center;
 }
+/* Reusing button style for both OAuth providers to match Vercel's unified dark aesthetic */
 .oauth-btn {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 10px;
     width: 100%;
-    padding: 12px 16px;
+    padding: 0 16px;
     margin-bottom: 12px;
     border-radius: 6px;
     cursor: pointer;
     font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-weight: 500;
-    transition: all 0.15s ease;
+    transition: background-color 0.2s ease;
+    position: relative;
+    overflow: visible;
+    height: 48px; /* Taller touch targets like Vercel */
+    
+    /* Vercel-like Styles */
+    background-color: var(--vscode-editor-background); /* Black-ish in dark mode */
+    border: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-foreground);
 }
-.oauth-btn.github {
-    background: #24292e;
-    color: #ffffff;
-    border: 1px solid #24292e;
-}
-.oauth-btn.github:hover {
-    background: #2f363d;
-    border-color: #2f363d;
-}
-.oauth-btn.google {
-    background: #ffffff;
-    color: #333333;
-    border: 1px solid #dadce0;
-}
-.oauth-btn.google:hover {
-    background: #f8f9fa;
-}
+/* Ensure icons are visible on dark background */
 .oauth-btn svg {
+    width: 20px;
+    height: 20px;
     flex-shrink: 0;
+}
+/* Hover State - light highlight */
+.oauth-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+/* Active State */
+.oauth-btn:active {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.oauth-btn:last-child {
+    margin-bottom: 0;
+}
+.oauth-icon-wrapper {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 12px;
+}
+.oauth-btn-text {
+    flex: 1;
+    text-align: center;
 }
 
 #graph {
