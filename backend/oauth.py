@@ -83,30 +83,33 @@ async def get_github_user_info(token: dict) -> dict:
 async def get_google_user_info(token: dict) -> dict:
     """
     Fetch user info from Google.
-    For OpenID Connect, user info is in the id_token.
+    For OpenID Connect, user info is already in token['userinfo'] parsed from ID token.
     Returns dict with email, name, avatar_url, provider_id.
     """
-    import httpx
-
-    # For OpenID Connect, we can get info from userinfo endpoint
-    access_token = token.get('access_token')
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-    }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            'https://www.googleapis.com/oauth2/v3/userinfo',
-            headers=headers
-        )
-        user_data = response.json()
-
-        return {
-            'email': user_data.get('email'),
-            'name': user_data.get('name'),
-            'avatar_url': user_data.get('picture'),
-            'provider_id': user_data.get('sub'),  # Google's unique user ID
+    # With OpenID Connect (server_metadata_url), Authlib automatically parses the ID token
+    # and provides userinfo directly in the token dict
+    if 'userinfo' in token:
+        user_data = token['userinfo']
+    else:
+        # Fallback to userinfo endpoint if userinfo not in token
+        import httpx
+        access_token = token.get('access_token')
+        headers = {
+            'Authorization': f'Bearer {access_token}',
         }
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                'https://www.googleapis.com/oauth2/v3/userinfo',
+                headers=headers
+            )
+            user_data = response.json()
+
+    return {
+        'email': user_data.get('email'),
+        'name': user_data.get('name'),
+        'avatar_url': user_data.get('picture'),
+        'provider_id': user_data.get('sub'),  # Google's unique user ID
+    }
 
 
 def is_github_configured() -> bool:

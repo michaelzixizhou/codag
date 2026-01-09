@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,6 +9,7 @@ from typing import Optional, Callable, Awaitable, Any
 import json
 import uuid
 import datetime
+import os
 
 from models import (
     Token, User, AnalyzeRequest, WorkflowGraph,
@@ -42,6 +44,11 @@ from config import settings
 VSCODE_CALLBACK_URI = "vscode://codag.codag/auth/callback"
 
 app = FastAPI(title="Codag")
+
+# Serve static files (auth callback HTML)
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Add session middleware for OAuth state
 app.add_middleware(
@@ -111,8 +118,9 @@ async def _handle_oauth_callback(
         user_info = await get_user_info(token)
 
         if not user_info.get('email'):
+            # Redirect to callback page with error
             return RedirectResponse(
-                url=f"{VSCODE_CALLBACK_URI}?error=no_email",
+                url=f"{settings.backend_url}/static/auth-callback.html?error=no_email",
                 status_code=302
             )
 
@@ -149,13 +157,15 @@ async def _handle_oauth_callback(
         # Update stored hash with final token
         await store_refresh_token(db, user.id, jwt_refresh_token, token_family)
 
+        # Redirect to callback HTML page which will handle vscode:// URI redirect
         return RedirectResponse(
-            url=f"{VSCODE_CALLBACK_URI}?token={jwt_access_token}&refreshToken={jwt_refresh_token}",
+            url=f"{settings.backend_url}/static/auth-callback.html?token={jwt_access_token}&refreshToken={jwt_refresh_token}",
             status_code=302
         )
     except Exception as e:
+        # Redirect to callback page with error
         return RedirectResponse(
-            url=f"{VSCODE_CALLBACK_URI}?error={str(e)}",
+            url=f"{settings.backend_url}/static/auth-callback.html?error={str(e)}",
             status_code=302
         )
 
