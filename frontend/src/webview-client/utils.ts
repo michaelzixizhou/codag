@@ -43,6 +43,73 @@ export function intersectRect(
 }
 
 /**
+ * Calculate intersection point at hexagon boundary
+ * Short hexagon with points on left/right, flat top/bottom
+ * indent = 20% of width for the angled corners
+ */
+export function intersectHexagon(
+    sourceNode: { x: number; y: number },
+    targetNode: { x: number; y: number },
+    nodeWidth: number = 50,
+    nodeHeight: number = 50
+): { x: number; y: number } {
+    const dx = sourceNode.x - targetNode.x;
+    const dy = sourceNode.y - targetNode.y;
+    const hw = nodeWidth / 2;
+    const hh = nodeHeight / 2;
+    const indent = nodeWidth * 0.2;
+
+    // Handle edge case where source and target are at same position
+    if (dx === 0 && dy === 0) {
+        return { x: targetNode.x, y: targetNode.y - hh };
+    }
+
+    // Normalize direction
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const nx = dx / len;
+    const ny = dy / len;
+
+    // Check intersection with each edge of the hexagon
+    // Hexagon vertices (clockwise from left point):
+    // Left: (-hw, 0), TopLeft: (-hw+indent, -hh), TopRight: (hw-indent, -hh)
+    // Right: (hw, 0), BottomRight: (hw-indent, hh), BottomLeft: (-hw+indent, hh)
+
+    let bestT = Infinity;
+
+    // Helper to intersect ray from center with line segment
+    const intersectSegment = (x1: number, y1: number, x2: number, y2: number) => {
+        const ex = x2 - x1, ey = y2 - y1;
+        const denom = nx * ey - ny * ex;
+        if (Math.abs(denom) < 1e-10) return Infinity;
+        const t = (x1 * ey - y1 * ex) / denom;
+        const s = (x1 * ny - y1 * nx) / denom;
+        if (t > 0 && s >= 0 && s <= 1) return t;
+        return Infinity;
+    };
+
+    // Check all 6 edges
+    bestT = Math.min(bestT, intersectSegment(-hw, 0, -hw + indent, -hh));      // Left to TopLeft
+    bestT = Math.min(bestT, intersectSegment(-hw + indent, -hh, hw - indent, -hh)); // Top edge
+    bestT = Math.min(bestT, intersectSegment(hw - indent, -hh, hw, 0));        // TopRight to Right
+    bestT = Math.min(bestT, intersectSegment(hw, 0, hw - indent, hh));         // Right to BottomRight
+    bestT = Math.min(bestT, intersectSegment(hw - indent, hh, -hw + indent, hh));   // Bottom edge
+    bestT = Math.min(bestT, intersectSegment(-hw + indent, hh, -hw, 0));       // BottomLeft to Left
+
+    if (bestT === Infinity) {
+        // Fallback to simple rectangle intersection
+        bestT = Math.min(hw / Math.abs(nx), hh / Math.abs(ny));
+    }
+
+    return {
+        x: targetNode.x + nx * bestT,
+        y: targetNode.y + ny * bestT
+    };
+}
+
+// Keep old name as alias for compatibility
+export const intersectDiamond = intersectHexagon;
+
+/**
  * Generate unique color from string hash using HSL
  */
 export function colorFromString(str: string, saturation: number = 70, lightness: number = 60): string {
@@ -103,18 +170,26 @@ export function getVirtualNodeId(nodeId: string, workflowId: string): string {
 
 /**
  * Extract original node ID from virtual ID
+ * Virtual IDs have format: nodeId__workflowId (where workflowId starts with "workflow_")
+ * Node IDs themselves contain __ (format: file__function or file__function__line)
  */
 export function getOriginalNodeId(virtualId: string): string {
-    const parts = virtualId.split('__');
-    return parts[0];
+    // Check if this ends with a workflow suffix (e.g., __workflow_1)
+    const workflowSuffixMatch = virtualId.match(/__workflow_\d+$/);
+    if (workflowSuffixMatch) {
+        // Strip the workflow suffix
+        return virtualId.slice(0, -workflowSuffixMatch[0].length);
+    }
+    // Not a virtual ID, return as-is
+    return virtualId;
 }
 
 /**
  * Extract workflow ID from virtual node ID
  */
 export function getWorkflowIdFromVirtual(virtualId: string): string | null {
-    const parts = virtualId.split('__');
-    return parts.length > 1 ? parts[1] : null;
+    const workflowSuffixMatch = virtualId.match(/__workflow_(\d+)$/);
+    return workflowSuffixMatch ? `workflow_${workflowSuffixMatch[1]}` : null;
 }
 
 /**
@@ -175,8 +250,8 @@ function getEdgeDirection(
 }
 
 /**
- * Generate edge path with cubic bezier curves
- * Control points extend perpendicular to node edges for smooth curves
+ * Generate orthogonal edge path (square corners, no curves)
+ * For top-down layout: exit bottom, bend horizontally, enter top
  */
 export function generateEdgePath(
     edge: any,
@@ -205,61 +280,21 @@ export function generateEdgePath(
     const tgtWidth = targetNode.width || targetWidth;
     const tgtHeight = targetNode.height || targetHeight;
 
-    // Check if bidirectional (reverse edge exists)
-    const isBidirectional = allEdges.some((e: any) => e.source === edge.target && e.target === edge.source);
+    // For top-down layout: source exits from bottom, target enters from top
+    const startX = sourceNode.x;
+    const startY = sourceNode.y + srcHeight / 2;  // Bottom of source
+    const endX = targetNode.x;
+    const endY = targetNode.y - tgtHeight / 2 - ARROW_HEAD_LENGTH;  // Top of target (with arrow offset)
 
-    // Calculate intersection at source node boundary
-    const sourceIntersection = intersectRect(targetNode, sourceNode, srcWidth, srcHeight);
-
-    // Calculate intersection at target node boundary
-    const targetIntersection = intersectRect(sourceNode, targetNode, tgtWidth, tgtHeight);
-
-    // Get direction vectors (perpendicular to the edge each point is on)
-    const startDir = getEdgeDirection(sourceIntersection, sourceNode, srcWidth / 2, srcHeight / 2);
-    const endDir = getEdgeDirection(targetIntersection, targetNode, tgtWidth / 2, tgtHeight / 2);
-
-    // Shorten endpoint along the curve's approach direction
-    const startpoint = sourceIntersection;
-    const endpoint = {
-        x: targetIntersection.x + endDir.x * ARROW_HEAD_LENGTH,
-        y: targetIntersection.y + endDir.y * ARROW_HEAD_LENGTH
-    };
-
-    // Direction from start to end point (flow)
-    const dx = endpoint.x - startpoint.x;
-    const dy = endpoint.y - startpoint.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist < 10) {
-        return `M${startpoint.x},${startpoint.y} L${endpoint.x},${endpoint.y}`;
+    // If nodes are vertically aligned (or very close), draw straight line
+    if (Math.abs(startX - endX) < 5) {
+        return `M${startX},${startY} L${endX},${endY}`;
     }
 
-    const flowDirX = dx / dist;
-    const flowDirY = dy / dist;
+    // Create orthogonal path with one horizontal segment
+    // Midpoint Y is halfway between source bottom and target top
+    const midY = (startY + endY) / 2;
 
-    // Blend perpendicular direction with flow direction
-    // This limits curve to 90° max while still exiting/entering perpendicular-ish
-    const blendFactor = 0.5; // 0 = pure flow, 1 = pure perpendicular
-
-    // Start control: blend startDir with flowDir
-    let ctrl1DirX = startDir.x * blendFactor + flowDirX * (1 - blendFactor);
-    let ctrl1DirY = startDir.y * blendFactor + flowDirY * (1 - blendFactor);
-    let len1 = Math.sqrt(ctrl1DirX * ctrl1DirX + ctrl1DirY * ctrl1DirY);
-    if (len1 > 0) { ctrl1DirX /= len1; ctrl1DirY /= len1; }
-
-    // End control: blend endDir with -flowDir (pointing back)
-    let ctrl2DirX = endDir.x * blendFactor + (-flowDirX) * (1 - blendFactor);
-    let ctrl2DirY = endDir.y * blendFactor + (-flowDirY) * (1 - blendFactor);
-    let len2 = Math.sqrt(ctrl2DirX * ctrl2DirX + ctrl2DirY * ctrl2DirY);
-    if (len2 > 0) { ctrl2DirX /= len2; ctrl2DirY /= len2; }
-
-    // Control offset scales with distance
-    const ctrlOffset = Math.min(dist * 0.4, 60);
-
-    const ctrl1X = startpoint.x + ctrl1DirX * ctrlOffset;
-    const ctrl1Y = startpoint.y + ctrl1DirY * ctrlOffset;
-    const ctrl2X = endpoint.x + ctrl2DirX * ctrlOffset;
-    const ctrl2Y = endpoint.y + ctrl2DirY * ctrlOffset;
-
-    return `M${startpoint.x},${startpoint.y} C${ctrl1X},${ctrl1Y} ${ctrl2X},${ctrl2Y} ${endpoint.x},${endpoint.y}`;
+    // Path: down from source, horizontal, down to target
+    return `M${startX},${startY} L${startX},${midY} L${endX},${midY} L${endX},${endY}`;
 }

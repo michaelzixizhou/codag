@@ -1,26 +1,93 @@
+/**
+ * Cache Manager for Codag
+ *
+ * Version 8: New node ID format with :: separator
+ *
+ * Key features:
+ * - Cache analysis results per-file (not per-batch)
+ * - Cross-file edges stored separately and validated at merge time
+ * - Node IDs are deterministic: {path}::{function} or {path}::{function}::{line}
+ * - Uses :: as separator (colons forbidden in filenames, so unambiguous)
+ * - AST-aware content hashing for change detection
+ * - No prefixing needed - IDs are globally unique by design
+ */
+
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as path from 'path';
-import { WorkflowGraph } from './api';
+import { WorkflowGraph, WorkflowNode, WorkflowEdge, WorkflowMetadata } from './types';
 import { StaticAnalyzer } from './static-analyzer';
+import { buildNodeLookup, findMatchingNodeId } from './edge-resolver';
+import { isLLMImport } from './providers';
+import { CONFIG } from './config';
 
-// Cache version - increment when format changes to auto-invalidate old entries
-// v1: absolute paths in cache keys
-// v2: relative paths in cache keys (for portability)
-const CACHE_VERSION = 2;
+const CACHE_VERSION = CONFIG.CACHE.VERSION;
 
-interface PerFileCacheEntry {
-    filePath: string;
-    contentHash: string;
-    graph: WorkflowGraph;
+/**
+ * Cached analysis result for a single file
+ */
+interface FileCache {
+    hash: string;                    // AST-aware content hash
+    nodes: WorkflowNode[];           // Nodes from this file (deterministic IDs)
+    internalEdges: WorkflowEdge[];   // Edges within this file
+    timestamp: number;
+}
+
+/**
+ * Cross-file edge (stored separately, validated at merge)
+ */
+interface CrossFileEdge {
+    sourceFile: string;
+    sourceNodeId: string;            // Deterministic node ID
+    targetFile: string;
+    targetNodeId: string;            // Deterministic node ID
+    label?: string;
+    timestamp: number;
+}
+
+/**
+ * Workflow metadata
+ */
+interface WorkflowInfo {
+    id: string;
+    name: string;
+    description?: string;
+    primaryFile: string;
+}
+
+/**
+ * Full cache file structure
+ */
+interface CacheFile {
+    version: number;
+    files: Record<string, FileCache>;
+    crossFileEdges: CrossFileEdge[];
+    workflows: Record<string, WorkflowInfo>;
+}
+
+/**
+ * Metadata layer for compatibility
+ */
+export interface CachedMetadata {
+    labels: Record<string, string>;
+    descriptions: Record<string, string>;
+    edgeLabels: Record<string, string>;
     timestamp: number;
 }
 
 export class CacheManager {
     private cachePath: vscode.Uri | null = null;
-    private perFileCache: Record<string, PerFileCacheEntry> = {};
+    private files: Record<string, FileCache> = {};
+    private crossFileEdges: CrossFileEdge[] = [];
+    private workflows: Record<string, WorkflowInfo> = {};
     private initPromise: Promise<void>;
     private staticAnalyzer: StaticAnalyzer;
+
+    // Debounced save
+    private saveTimer: NodeJS.Timeout | null = null;
+    private saveDebounceMs = 500;
+    private maxSaveWaitMs = 5000;
+    private lastSaveTime = 0;
 
     constructor(private context: vscode.ExtensionContext) {
         this.initPromise = this.initializeCache();
@@ -28,33 +95,41 @@ export class CacheManager {
     }
 
     /**
-     * Initialize cache from workspace folder
+     * Convert relative path to full path using workspace root.
+     * Ensures consistent cache keys regardless of path format from LLM or local updates.
      */
+    private toFullPath(filePath: string): string {
+        // Already absolute
+        if (path.isAbsolute(filePath)) {
+            return filePath;
+        }
+        // Convert relative to absolute
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            return filePath;
+        }
+        return path.join(workspaceRoot, filePath);
+    }
+
     private async initializeCache() {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             return;
         }
 
-        // Use first workspace folder
         const workspaceFolder = workspaceFolders[0];
         const vscodeFolderPath = path.join(workspaceFolder.uri.fsPath, '.vscode');
         this.cachePath = vscode.Uri.file(path.join(vscodeFolderPath, 'codag-cache.json'));
 
-        // Ensure .vscode directory exists
         try {
             await vscode.workspace.fs.createDirectory(vscode.Uri.file(vscodeFolderPath));
         } catch (error) {
-            // Directory might already exist, that's fine
+            // Directory might already exist
         }
 
-        // Load existing cache
         await this.loadCache();
     }
 
-    /**
-     * Load cache from disk
-     */
     private async loadCache() {
         if (!this.cachePath) return;
 
@@ -62,382 +137,783 @@ export class CacheManager {
             const cacheContent = await vscode.workspace.fs.readFile(this.cachePath);
             const parsed = JSON.parse(cacheContent.toString());
 
-            // Check version compatibility
-            const cacheVersion = parsed.version || 1;
-            if (cacheVersion !== CACHE_VERSION) {
-                console.log(`Cache version mismatch (expected ${CACHE_VERSION}, got ${cacheVersion}), clearing cache`);
-                this.perFileCache = {};
-                return;
+            if (parsed.version === CACHE_VERSION) {
+                this.files = parsed.files || {};
+                this.crossFileEdges = parsed.crossFileEdges || [];
+                this.workflows = parsed.workflows || {};
+            } else {
+                // Different version - start fresh
+                console.log(`Cache version ${parsed.version} → ${CACHE_VERSION}, clearing cache`);
+                this.files = {};
+                this.crossFileEdges = [];
+                this.workflows = {};
             }
-
-            this.perFileCache = parsed.perFileCache || {};
         } catch (error) {
-            // Cache file doesn't exist or is invalid, start with empty cache
-            this.perFileCache = {};
+            this.files = {};
+            this.crossFileEdges = [];
+            this.workflows = {};
         }
     }
 
-    /**
-     * Save cache to disk
-     */
-    private async saveCache() {
+    private scheduleSave() {
+        const now = Date.now();
+
+        if (this.saveTimer && now - this.lastSaveTime > this.maxSaveWaitMs) {
+            clearTimeout(this.saveTimer);
+            this.saveTimer = null;
+            this.saveNow();
+            return;
+        }
+
+        if (this.saveTimer) {
+            clearTimeout(this.saveTimer);
+        }
+
+        this.saveTimer = setTimeout(() => {
+            this.saveTimer = null;
+            this.saveNow();
+        }, this.saveDebounceMs);
+    }
+
+    private async saveNow() {
         if (!this.cachePath) return;
 
         try {
-            const cacheContent = JSON.stringify({
+            // Create snapshot to avoid race condition with concurrent modifications
+            // Deep clone ensures mutations during async write don't corrupt saved data
+            const snapshot: CacheFile = {
                 version: CACHE_VERSION,
-                perFileCache: this.perFileCache
-            }, null, 2);
+                files: JSON.parse(JSON.stringify(this.files)),
+                crossFileEdges: JSON.parse(JSON.stringify(this.crossFileEdges)),
+                workflows: JSON.parse(JSON.stringify(this.workflows))
+            };
+            const cacheContent = JSON.stringify(snapshot, null, 2);
             await vscode.workspace.fs.writeFile(this.cachePath, Buffer.from(cacheContent, 'utf8'));
+            this.lastSaveTime = Date.now();
         } catch (error) {
             console.error('Failed to save cache:', error);
         }
     }
 
+    // =========================================================================
+    // Hashing
+    // =========================================================================
+
     /**
-     * Hash file content based on full content (fallback for non-code files)
+     * Generate stable file prefix (6 chars) for node ID namespacing
+     */
+    getFilePrefix(filePath: string): string {
+        return crypto.createHash('md5').update(filePath).digest('hex').substring(0, 6);
+    }
+
+    /**
+     * Hash content (raw)
      */
     private hashContent(content: string): string {
         return crypto.createHash('sha256').update(content).digest('hex');
     }
 
     /**
-     * AST-aware content hashing: only hash LLM-relevant code
-     * Ignores comments, whitespace changes, and non-LLM code
+     * Hash content using AST-aware method (ignores comments, whitespace)
      */
-    private hashContentAST(content: string, filePath: string): string {
+    hashContentAST(content: string, filePath: string): string {
         try {
-            // Analyze file to extract LLM-relevant locations
             const analysis = this.staticAnalyzer.analyze(content, filePath);
-
-            // Create normalized representation of LLM-relevant code
-            // Include: imports, variables, location line numbers and types
-            // Exclude: comments, whitespace, exact column numbers
             const normalized = {
-                // LLM-related imports (sorted for consistency)
-                imports: analysis.imports.filter(imp =>
-                    /openai|anthropic|gemini|ollama|cohere|langchain|langgraph|mastra|crewai|xai|grok|mistral|together|replicate|fireworks|bedrock|azure|vertexai|ai21|deepseek|openrouter|llama_index|autogen|haystack|instructor|pydantic_ai|elevenlabs|runway|sync|stability|heygen|d-id|leonardo/i.test(imp)
-                ).sort(),
-
-                // LLM-related variables (sorted)
+                imports: analysis.imports.filter(isLLMImport).sort(),
                 variables: Array.from(analysis.llmRelatedVariables).sort(),
-
-                // Code locations (line + type only, ignore column for whitespace tolerance)
                 locations: analysis.locations.map(loc => ({
                     line: loc.line,
                     type: loc.type,
                     function: loc.function
                 })).sort((a, b) => a.line - b.line)
             };
-
-            // Hash the normalized representation
-            const normalizedString = JSON.stringify(normalized);
-            return crypto.createHash('sha256').update(normalizedString).digest('hex');
+            return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
         } catch (error) {
-            // Fallback to full content hash if AST parsing fails
-            console.warn(`AST-aware hashing failed for ${filePath}, using full content hash:`, error);
             return this.hashContent(content);
         }
     }
 
-    async clear() {
-        this.perFileCache = {};
-        await this.saveCache();
-    }
+    // =========================================================================
+    // Cache Check
+    // =========================================================================
 
     /**
-     * Get cached graph for a single file by content hash
+     * Check if file is cached with matching hash
      */
-    async getPerFile(filePath: string, content: string): Promise<WorkflowGraph | null> {
-        await this.initPromise;
-
-        // Use AST-aware hashing for code files
-        const contentHash = this.hashContentAST(content, filePath);
-        const cacheKey = `${filePath}:${contentHash}`;
-        const entry = this.perFileCache[cacheKey];
-
-        if (!entry) return null;
-        return entry.graph;
+    isFileValid(filePath: string, contentHash: string): boolean {
+        const normalizedPath = this.toFullPath(filePath);
+        const cached = this.files[normalizedPath];
+        return cached !== undefined && cached.hash === contentHash;
     }
 
     /**
-     * Cache graph for a single file
-     */
-    async setPerFile(filePath: string, content: string, graph: WorkflowGraph) {
-        await this.initPromise;
-
-        // Use AST-aware hashing for code files
-        const contentHash = this.hashContentAST(content, filePath);
-        const cacheKey = `${filePath}:${contentHash}`;
-
-        this.perFileCache[cacheKey] = {
-            filePath,
-            contentHash,
-            graph,
-            timestamp: Date.now()
-        };
-
-        await this.saveCache();
-    }
-
-    /**
-     * Get cached graphs for multiple files, returning which files need analysis
-     */
-    async getMultiplePerFile(filePaths: string[], contents: string[]): Promise<{
-        cachedGraphs: WorkflowGraph[];
-        uncachedFiles: { path: string; content: string; }[];
-    }> {
-        await this.initPromise;
-
-        const cachedGraphs: WorkflowGraph[] = [];
-        const uncachedFiles: { path: string; content: string; }[] = [];
-
-        for (let i = 0; i < filePaths.length; i++) {
-            const cached = await this.getPerFile(filePaths[i], contents[i]);
-            if (cached) {
-                cachedGraphs.push(cached);
-            } else {
-                uncachedFiles.push({ path: filePaths[i], content: contents[i] });
-            }
-        }
-
-        return { cachedGraphs, uncachedFiles };
-    }
-
-    /**
-     * Get all cached workflows merged into a single graph
-     * Returns null if no cached workflows exist
-     */
-    async getMostRecentWorkflows(): Promise<WorkflowGraph | null> {
-        await this.initPromise;
-
-        const allGraphs = Object.values(this.perFileCache).map(entry => entry.graph);
-        if (allGraphs.length === 0) return null;
-
-        return this.mergeGraphs(allGraphs);
-    }
-
-    /**
-     * Get the most recent cached graph for each unique file path.
-     * Unlike getMostRecentWorkflows(), this deduplicates by file path,
-     * keeping only the most recently cached version of each file.
-     * This is useful for showing stale cached data while re-analyzing changed files.
-     * @param filterPaths Optional array of file paths to filter by. If provided, only returns graphs for these files.
-     */
-    async getMostRecentPerFile(filterPaths?: string[]): Promise<WorkflowGraph | null> {
-        await this.initPromise;
-
-        // Group entries by file path, keeping only the most recent (by timestamp)
-        const byFilePath: Record<string, PerFileCacheEntry> = {};
-        for (const entry of Object.values(this.perFileCache)) {
-            // If filter is provided, skip entries not in the filter
-            if (filterPaths && !filterPaths.includes(entry.filePath)) {
-                continue;
-            }
-            const existing = byFilePath[entry.filePath];
-            if (!existing || entry.timestamp > existing.timestamp) {
-                byFilePath[entry.filePath] = entry;
-            }
-        }
-
-        const graphs = Object.values(byFilePath).map(entry => entry.graph);
-        if (graphs.length === 0) return null;
-
-        return this.mergeGraphs(graphs);
-    }
-
-    /**
-     * Generate a short hash prefix for a file path to ensure unique node IDs
-     */
-    private getFilePrefix(filePath: string): string {
-        // Use first 6 chars of hash for brevity but sufficient uniqueness
-        return crypto.createHash('md5').update(filePath).digest('hex').substring(0, 6);
-    }
-
-    /**
-     * Merge multiple workflow graphs into one
-     * Prefixes node IDs with file hash to prevent collisions across files
-     */
-    mergeGraphs(graphs: WorkflowGraph[]): WorkflowGraph {
-        if (graphs.length === 0) {
-            return { nodes: [], edges: [], llms_detected: [], workflows: [] };
-        }
-
-        if (graphs.length === 1) {
-            return graphs[0];
-        }
-
-        const mergedNodes = new Map<string, any>();
-        const mergedEdges = new Map<string, any>();
-        const llmsDetectedSet = new Set<string>();
-        const mergedWorkflows = new Map<string, any>();
-
-        for (const graph of graphs) {
-            // Determine file prefix from first node's source, or use graph index
-            let filePrefix = '';
-            if (graph.nodes.length > 0 && graph.nodes[0].source?.file) {
-                filePrefix = this.getFilePrefix(graph.nodes[0].source.file);
-            }
-
-            // Build ID mapping for this graph
-            const idMap = new Map<string, string>();
-            for (const node of graph.nodes) {
-                const originalId = node.id;
-                // Prefix ID if it doesn't already have a file-specific prefix
-                const newId = filePrefix && !originalId.includes('_') ? `${filePrefix}_${originalId}` :
-                              filePrefix ? `${filePrefix}_${originalId}` : originalId;
-                idMap.set(originalId, newId);
-            }
-
-            // Merge nodes with prefixed IDs
-            for (const node of graph.nodes) {
-                const newId = idMap.get(node.id) || node.id;
-                mergedNodes.set(newId, {
-                    ...node,
-                    id: newId
-                });
-            }
-
-            // Merge edges with remapped source/target IDs
-            for (const edge of graph.edges) {
-                const newSource = idMap.get(edge.source) || edge.source;
-                const newTarget = idMap.get(edge.target) || edge.target;
-                const edgeKey = `${newSource}->${newTarget}`;
-                mergedEdges.set(edgeKey, {
-                    ...edge,
-                    source: newSource,
-                    target: newTarget
-                });
-            }
-
-            // Merge LLMs detected
-            for (const llm of graph.llms_detected || []) {
-                llmsDetectedSet.add(llm);
-            }
-
-            // Merge workflows with remapped nodeIds and prefixed workflow IDs
-            for (const workflow of graph.workflows || []) {
-                const workflowId = filePrefix ? `${filePrefix}_${workflow.id}` : workflow.id;
-                const remappedNodeIds = workflow.nodeIds.map((id: string) => idMap.get(id) || id);
-
-                // Remap component nodeIds as well
-                const remappedComponents = (workflow.components || []).map((comp: any) => ({
-                    ...comp,
-                    id: filePrefix ? `${filePrefix}_${comp.id}` : comp.id,
-                    nodeIds: comp.nodeIds.map((id: string) => idMap.get(id) || id)
-                }));
-
-                const existing = mergedWorkflows.get(workflowId);
-                if (existing) {
-                    // Merge nodeIds arrays and deduplicate
-                    const combinedNodeIds = [...new Set([...existing.nodeIds, ...remappedNodeIds])];
-                    // Merge components (don't duplicate)
-                    const existingCompIds = new Set((existing.components || []).map((c: any) => c.id));
-                    const newComponents = remappedComponents.filter((c: any) => !existingCompIds.has(c.id));
-                    mergedWorkflows.set(workflowId, {
-                        ...existing,
-                        nodeIds: combinedNodeIds,
-                        description: existing.description || workflow.description,
-                        components: [...(existing.components || []), ...newComponents]
-                    });
-                } else {
-                    mergedWorkflows.set(workflowId, {
-                        ...workflow,
-                        id: workflowId,
-                        nodeIds: remappedNodeIds,
-                        components: remappedComponents
-                    });
-                }
-            }
-        }
-
-        // Filter out orphaned edges (edges whose source or target nodes don't exist)
-        const nodeIds = new Set(mergedNodes.keys());
-        const validEdges = Array.from(mergedEdges.values()).filter(edge =>
-            nodeIds.has(edge.source) && nodeIds.has(edge.target)
-        );
-
-        return {
-            nodes: Array.from(mergedNodes.values()),
-            edges: validEdges,
-            llms_detected: Array.from(llmsDetectedSet),
-            workflows: Array.from(mergedWorkflows.values())
-        };
-    }
-
-    /**
-     * Check if a file is currently cached
+     * Check if file exists in cache (regardless of hash)
      */
     async isFileCached(filePath: string): Promise<boolean> {
         await this.initPromise;
-
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            return false;
-        }
-
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        const relativePath = path.relative(workspaceRoot, filePath);
-
-        // Check if any cache entry matches this file
-        return Object.values(this.perFileCache).some(entry =>
-            entry.filePath === relativePath || entry.filePath === filePath
-        );
+        const normalizedPath = this.toFullPath(filePath);
+        return normalizedPath in this.files;
     }
 
     /**
-     * Invalidate cache for a specific file
+     * Get cached file data
+     */
+    getFile(filePath: string): FileCache | null {
+        const normalizedPath = this.toFullPath(filePath);
+        return this.files[normalizedPath] || null;
+    }
+
+    /**
+     * Check multiple files, return cached vs uncached
+     */
+    async checkFiles(filePaths: string[], contents: string[]): Promise<{
+        cached: { path: string; content: string }[];
+        uncached: { path: string; content: string }[];
+    }> {
+        await this.initPromise;
+
+        const cached: { path: string; content: string }[] = [];
+        const uncached: { path: string; content: string }[] = [];
+
+        for (let i = 0; i < filePaths.length; i++) {
+            const fp = filePaths[i];
+            const content = contents[i];
+            const hash = this.hashContentAST(content, fp);
+
+            if (this.isFileValid(fp, hash)) {
+                cached.push({ path: fp, content });
+            } else {
+                uncached.push({ path: fp, content });
+            }
+        }
+
+        return { cached, uncached };
+    }
+
+    // =========================================================================
+    // Store Analysis Results
+    // =========================================================================
+
+    /**
+     * Store analysis result, splitting by file
+     * Node IDs are deterministic (file__function format) so no prefixing needed
+     */
+    async setAnalysisResult(
+        graph: WorkflowGraph,
+        contents: Record<string, string>
+    ): Promise<void> {
+        await this.initPromise;
+
+        // Helper to check if a relative path matches any content key
+        const isInBatch = (relativePath: string): boolean => {
+            if (contents[relativePath]) return true;
+            const normalizedRel = relativePath.replace(/\\/g, '/').replace(/^\//, '');
+            for (const fullPath of Object.keys(contents)) {
+                const normalizedFull = fullPath.replace(/\\/g, '/');
+                if (normalizedFull === normalizedRel) return true;
+                if (normalizedFull.endsWith('/' + normalizedRel)) return true;
+                if (normalizedFull.endsWith(normalizedRel)) return true;
+            }
+            return false;
+        };
+
+        // DEBUG: Log all nodes from LLM and which are in batch
+        console.log(`[DEBUG CACHE] setAnalysisResult received ${graph.nodes.length} nodes from LLM`);
+        console.log(`[DEBUG CACHE] Contents keys (batch files):`);
+        Object.keys(contents).forEach(k => console.log(`[DEBUG CACHE]   - ${k}`));
+
+        // Filter nodes to only those for files in this batch
+        // LLM sometimes creates nodes for files mentioned in HTTP connections context
+        const filteredNodes: WorkflowNode[] = [];
+        const skippedNodes: WorkflowNode[] = [];
+        for (const node of graph.nodes) {
+            const file = node.source?.file || 'unknown';
+            if (file === 'unknown' || isInBatch(file)) {
+                filteredNodes.push(node);
+            } else {
+                skippedNodes.push(node);
+            }
+        }
+
+        if (skippedNodes.length > 0) {
+            console.log(`[DEBUG CACHE] ⚠️  Filtered out ${skippedNodes.length} nodes for files NOT in batch:`);
+            for (const node of skippedNodes) {
+                console.log(`[DEBUG CACHE]     - ${node.id} (file: ${node.source?.file})`);
+            }
+        }
+        console.log(`[DEBUG CACHE] Keeping ${filteredNodes.length} nodes for files in batch`);
+
+        // Build node lookup from filtered nodes
+        const nodeById = new Map<string, WorkflowNode>();
+        const nodeToFile = new Map<string, string>();
+
+        for (const node of filteredNodes) {
+            nodeById.set(node.id, node);
+            const file = node.source?.file || 'unknown';
+            nodeToFile.set(node.id, file);
+        }
+
+        // Group nodes by file (IDs are already deterministic)
+        const nodesByFile = new Map<string, WorkflowNode[]>();
+        for (const node of filteredNodes) {
+            const file = node.source?.file || 'unknown';
+            if (!nodesByFile.has(file)) nodesByFile.set(file, []);
+            nodesByFile.get(file)!.push(node);
+        }
+
+        // DEBUG: Log grouped nodes
+        console.log(`[DEBUG CACHE] Grouped into ${nodesByFile.size} files:`);
+        for (const [file, nodes] of nodesByFile) {
+            const types = nodes.map(n => n.type).join(', ');
+            console.log(`[DEBUG CACHE]   ${file}: ${nodes.length} nodes (${types})`);
+        }
+
+        // Categorize edges
+        const internalEdgesByFile = new Map<string, WorkflowEdge[]>();
+        const newCrossFileEdges: CrossFileEdge[] = [];
+
+        for (const edge of graph.edges) {
+            const sourceFile = nodeToFile.get(edge.source);
+            const targetFile = nodeToFile.get(edge.target);
+
+            // For cross-batch edges, target might not be in nodeToFile
+            // Extract file from deterministic ID format: path::function or path::function::line
+            const extractFileFromId = (id: string): string | undefined => {
+                // Format: relative/path.ext::function or relative/path.ext::function::line
+                // Split on :: (unambiguous since : is forbidden in filenames)
+                const parts = id.split('::');
+                if (parts.length >= 2) {
+                    return parts[0]; // First part is the relative file path
+                }
+                return undefined;
+            };
+
+            const resolvedSourceFile = sourceFile || extractFileFromId(edge.source);
+            const resolvedTargetFile = targetFile || extractFileFromId(edge.target);
+
+            if (!resolvedSourceFile) continue;
+
+            if (resolvedSourceFile === resolvedTargetFile) {
+                // Internal edge
+                if (!internalEdgesByFile.has(resolvedSourceFile)) {
+                    internalEdgesByFile.set(resolvedSourceFile, []);
+                }
+                internalEdgesByFile.get(resolvedSourceFile)!.push(edge);
+            } else if (resolvedTargetFile) {
+                // Cross-file edge - normalize paths to full paths for consistent matching
+                newCrossFileEdges.push({
+                    sourceFile: this.toFullPath(resolvedSourceFile),
+                    sourceNodeId: edge.source,
+                    targetFile: this.toFullPath(resolvedTargetFile),
+                    targetNodeId: edge.target,
+                    label: edge.label,
+                    timestamp: Date.now()
+                });
+            }
+        }
+
+        // Helper to find content by matching path suffix
+        // Handles mismatch between full paths in contents keys and relative paths in node.source.file
+        const findContent = (relativePath: string): string | undefined => {
+            // Try exact match first
+            if (contents[relativePath]) return contents[relativePath];
+
+            // Normalize the relative path (remove leading slash, normalize separators)
+            const normalizedRel = relativePath.replace(/\\/g, '/').replace(/^\//, '');
+
+            // Match by suffix - find the full path that ends with the relative path
+            for (const [fullPath, content] of Object.entries(contents)) {
+                const normalizedFull = fullPath.replace(/\\/g, '/');
+
+                // Try multiple matching strategies
+                if (normalizedFull === normalizedRel) return content;
+                if (normalizedFull.endsWith('/' + normalizedRel)) return content;
+                if (normalizedFull.endsWith(normalizedRel)) return content;
+
+                // Also try matching by last N path segments
+                const relParts = normalizedRel.split('/');
+                const fullParts = normalizedFull.split('/');
+                if (relParts.length >= 2 && fullParts.length >= relParts.length) {
+                    const relSuffix = relParts.join('/');
+                    const fullSuffix = fullParts.slice(-relParts.length).join('/');
+                    if (relSuffix === fullSuffix) return content;
+                }
+            }
+
+            // DEBUG: Log when content not found
+            console.log(`[DEBUG findContent] NOT FOUND: "${relativePath}"`);
+            console.log(`[DEBUG findContent]   normalizedRel: "${normalizedRel}"`);
+            console.log(`[DEBUG findContent]   contents keys (${Object.keys(contents).length}):`);
+            Object.keys(contents).slice(0, 5).forEach(k => console.log(`[DEBUG findContent]     - ${k}`));
+            return undefined;
+        };
+
+        // Store per-file (normalize to full paths for consistent cache keys)
+        // Store ALL nodes returned by LLM - filtering happens post-merge based on connectivity
+        console.log(`[CACHE] Storing batch results for ${nodesByFile.size} files with nodes:`);
+        for (const [file, nodes] of nodesByFile) {
+            const content = findContent(file);
+            if (!content) {
+                console.log(`[CACHE]   ⚠️  ${file}: content not found, skipping`);
+                continue;
+            }
+
+            const llmNodes = nodes.filter(n => n.type === 'llm').length;
+            const stepNodes = nodes.filter(n => n.type === 'step').length;
+            const decNodes = nodes.filter(n => n.type === 'decision').length;
+            console.log(`[CACHE]   ✓ ${file}: ${nodes.length} nodes (llm:${llmNodes}, step:${stepNodes}, dec:${decNodes})`);
+
+            const normalizedPath = this.toFullPath(file);
+            this.files[normalizedPath] = {
+                hash: this.hashContentAST(content, file),
+                nodes,
+                internalEdges: internalEdgesByFile.get(file) || [],
+                timestamp: Date.now()
+            };
+        }
+
+        // Cache files that had no nodes (valid result = no LLM workflow)
+        // This prevents re-analyzing files we already know have no workflows
+        const emptyFiles: string[] = [];
+        for (const [filePath, content] of Object.entries(contents)) {
+            // Check if already cached by the node-based loop above
+            // nodesByFile uses relative paths, so check if any relative path matches this full path
+            let alreadyCached = false;
+            for (const relPath of nodesByFile.keys()) {
+                const normalizedFull = filePath.replace(/\\/g, '/');
+                const normalizedRel = relPath.replace(/\\/g, '/');
+                if (normalizedFull.endsWith('/' + normalizedRel) || normalizedFull === normalizedRel) {
+                    alreadyCached = true;
+                    break;
+                }
+            }
+            if (alreadyCached) continue;
+
+            // Cache as empty (no nodes, no edges)
+            // Normalize to full path for consistent cache keys
+            const normalizedPath = this.toFullPath(filePath);
+            const shortPath = filePath.split('/').slice(-2).join('/');
+            emptyFiles.push(shortPath);
+            this.files[normalizedPath] = {
+                hash: this.hashContentAST(content, filePath),
+                nodes: [],
+                internalEdges: [],
+                timestamp: Date.now()
+            };
+        }
+        if (emptyFiles.length > 0) {
+            console.log(`[CACHE] Files with NO nodes (LLM returned NO_LLM_WORKFLOW): ${emptyFiles.length}`);
+            for (const f of emptyFiles.slice(0, 10)) {
+                console.log(`[CACHE]   ∅ ${f}`);
+            }
+            if (emptyFiles.length > 10) {
+                console.log(`[CACHE]   ... and ${emptyFiles.length - 10} more`);
+            }
+        }
+
+        // Clean up old cross-file edges from files being updated
+        // This prevents stale edges when file structure changes
+        const updatedFiles = new Set(Object.keys(contents));
+        this.crossFileEdges = this.crossFileEdges.filter(
+            edge => !updatedFiles.has(edge.sourceFile)
+        );
+
+        // Merge new cross-file edges (dedupe, keep newest)
+        this.mergeCrossFileEdges(newCrossFileEdges);
+
+        // Extract workflow info
+        for (const wf of graph.workflows || []) {
+            const primaryFile = this.findPrimaryFile(wf.nodeIds, nodeToFile);
+            this.workflows[wf.id] = {
+                id: wf.id,
+                name: wf.name,
+                description: wf.description,
+                primaryFile
+            };
+        }
+
+        // Clean up stale workflow metadata - remove workflows whose primary file has no nodes
+        for (const [wfId, wf] of Object.entries(this.workflows)) {
+            if (wf.primaryFile === 'unknown') {
+                delete this.workflows[wfId];
+                continue;
+            }
+            const normalizedPrimary = this.toFullPath(wf.primaryFile);
+            const fileCache = this.files[normalizedPrimary];
+            if (!fileCache || fileCache.nodes.length === 0) {
+                delete this.workflows[wfId];
+            }
+        }
+
+        this.scheduleSave();
+    }
+
+    /**
+     * Find primary file for a workflow (file with most nodes)
+     */
+    private findPrimaryFile(
+        nodeIds: string[],
+        nodeToFile: Map<string, string>
+    ): string {
+        const fileCounts = new Map<string, number>();
+
+        for (const id of nodeIds) {
+            const file = nodeToFile.get(id);
+            if (file) {
+                fileCounts.set(file, (fileCounts.get(file) || 0) + 1);
+            }
+        }
+
+        let maxFile = 'unknown';
+        let maxCount = 0;
+        for (const [file, count] of fileCounts) {
+            if (count > maxCount) {
+                maxCount = count;
+                maxFile = file;
+            }
+        }
+        return maxFile;
+    }
+
+    /**
+     * Merge new cross-file edges with replace-on-conflict behavior
+     * Newer edges (by timestamp) replace older ones, preserving latest labels
+     */
+    private mergeCrossFileEdges(newEdges: CrossFileEdge[]) {
+        const edgeKey = (e: CrossFileEdge) =>
+            `${e.sourceFile}:${e.sourceNodeId}->${e.targetFile}:${e.targetNodeId}`;
+
+        // Build map from existing edges
+        const edgeMap = new Map<string, CrossFileEdge>();
+        for (const edge of this.crossFileEdges) {
+            edgeMap.set(edgeKey(edge), edge);
+        }
+
+        // Merge new edges - replace if newer timestamp
+        for (const edge of newEdges) {
+            const key = edgeKey(edge);
+            const existing = edgeMap.get(key);
+            if (!existing || edge.timestamp > existing.timestamp) {
+                edgeMap.set(key, edge);
+            }
+        }
+
+        // Convert back to array
+        this.crossFileEdges = Array.from(edgeMap.values());
+    }
+
+    // =========================================================================
+    // Retrieve & Merge
+    // =========================================================================
+
+    /**
+     * Get merged graph for display from cached files
+     */
+    async getMergedGraph(filePaths?: string[]): Promise<WorkflowGraph | null> {
+        await this.initPromise;
+
+        // Normalize input paths to full paths (cache keys are always full paths)
+        const targetFiles = filePaths
+            ? filePaths.map(fp => this.toFullPath(fp))
+            : Object.keys(this.files);
+        const allNodes: WorkflowNode[] = [];
+        const allEdges: WorkflowEdge[] = [];
+        const nodeIds = new Set<string>();
+        const llmsDetected = new Set<string>();
+
+        // Collect from cached files (dedupe nodes by ID, keep most complete)
+        const nodeById = new Map<string, WorkflowNode>();
+        for (const fp of targetFiles) {
+            const cached = this.files[fp];
+            if (cached) {
+                for (const node of cached.nodes) {
+                    const existing = nodeById.get(node.id);
+                    // Keep node with more complete info (has source.line vs doesn't)
+                    if (!existing || (node.source?.line && !existing.source?.line)) {
+                        nodeById.set(node.id, node);
+                    }
+                    nodeIds.add(node.id);
+                    if (node.model) llmsDetected.add(node.model);
+                }
+                allEdges.push(...cached.internalEdges);
+            }
+        }
+        allNodes.push(...nodeById.values());
+
+        if (allNodes.length === 0) return null;
+
+        // Add valid cross-file edges with fuzzy ID resolution
+        // This handles cases where LLM uses shortened paths (e.g., "file.py::func")
+        // but actual node IDs have full paths (e.g., "dir/file.py::func")
+        const lookup = buildNodeLookup(allNodes);
+        for (const edge of this.crossFileEdges) {
+            const resolvedSource = findMatchingNodeId(edge.sourceNodeId, lookup);
+            const resolvedTarget = findMatchingNodeId(edge.targetNodeId, lookup);
+            if (resolvedSource && resolvedTarget) {
+                allEdges.push({
+                    source: resolvedSource,
+                    target: resolvedTarget,
+                    label: edge.label
+                });
+            }
+        }
+
+        // Build workflows from connectivity
+        const workflows = this.computeWorkflows(allNodes, allEdges);
+
+        return {
+            nodes: allNodes,
+            edges: allEdges,
+            llms_detected: Array.from(llmsDetected),
+            workflows
+        };
+    }
+
+    /**
+     * Compute workflows from graph connectivity, preserving LLM-provided names
+     */
+    private computeWorkflows(nodes: WorkflowNode[], edges: WorkflowEdge[]): WorkflowMetadata[] {
+        // Build adjacency list
+        const adj = new Map<string, Set<string>>();
+        for (const node of nodes) {
+            adj.set(node.id, new Set());
+        }
+        for (const edge of edges) {
+            adj.get(edge.source)?.add(edge.target);
+            adj.get(edge.target)?.add(edge.source);
+        }
+
+        // Find connected components
+        const visited = new Set<string>();
+        const components: string[][] = [];
+
+        for (const node of nodes) {
+            if (visited.has(node.id)) continue;
+
+            const component: string[] = [];
+            const stack = [node.id];
+
+            while (stack.length > 0) {
+                const curr = stack.pop()!;
+                if (visited.has(curr)) continue;
+                visited.add(curr);
+                component.push(curr);
+
+                for (const neighbor of adj.get(curr) || []) {
+                    if (!visited.has(neighbor)) {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+
+            if (component.length > 0) {
+                components.push(component);
+            }
+        }
+
+        // Create workflow metadata for each component
+        return components.map((nodeIds, idx) => {
+            // Find workflow info by matching node IDs (more reliable than primaryFile)
+            let name: string | undefined;
+            let description: string | undefined;
+            let matchedId: string | undefined;
+
+            // Build set for faster lookup
+            const nodeIdSet = new Set(nodeIds);
+
+            // Look for cached workflow that shares nodes with this component
+            for (const [wfId, wf] of Object.entries(this.workflows)) {
+                // Check if this workflow's primary file matches any node in component
+                const componentNodes = nodes.filter(n => nodeIdSet.has(n.id));
+                const hasMatchingFile = componentNodes.some(n => n.source?.file === wf.primaryFile);
+
+                if (hasMatchingFile) {
+                    name = wf.name;
+                    description = wf.description;
+                    matchedId = wfId;
+                    break;
+                }
+            }
+
+            // Fallback: derive name from primary node's function/file
+            if (!name) {
+                const primaryNode = nodes.find(n => nodeIdSet.has(n.id) && n.type === 'llm');
+                const fallbackNode = primaryNode || nodes.find(n => nodeIdSet.has(n.id));
+
+                if (fallbackNode?.source?.function) {
+                    // Convert function_name to Title Case
+                    name = fallbackNode.source.function
+                        .replace(/_/g, ' ')
+                        .replace(/([a-z])([A-Z])/g, '$1 $2')
+                        .replace(/\b\w/g, c => c.toUpperCase());
+                } else if (fallbackNode?.source?.file) {
+                    // Use filename without extension
+                    const fileName = fallbackNode.source.file.split('/').pop() || 'unknown';
+                    name = fileName.replace(/\.[^.]+$/, '')
+                        .replace(/[-_]/g, ' ')
+                        .replace(/\b\w/g, c => c.toUpperCase());
+                } else {
+                    name = `Workflow ${idx + 1}`;
+                }
+            }
+
+            return {
+                id: matchedId || `workflow_${idx}`,
+                name,
+                description,
+                nodeIds
+            };
+        }).filter(wf => {
+            // Filter out workflows without LLM nodes
+            const workflowNodes = nodes.filter(n => wf.nodeIds.includes(n.id));
+            const hasLLMNode = workflowNodes.some(n => n.type === 'llm');
+            if (!hasLLMNode) {
+                console.log(`[CACHE] Filtering workflow "${wf.name}" - no LLM nodes`);
+            }
+            return hasLLMNode;
+        });
+    }
+
+    // =========================================================================
+    // Invalidation & Clear
+    // =========================================================================
+
+    /**
+     * Invalidate a single file and its cross-file edges
      */
     async invalidateFile(filePath: string): Promise<void> {
         await this.initPromise;
 
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            return;
-        }
+        // Normalize path to full path (cache keys are always full paths)
+        const normalizedPath = this.toFullPath(filePath);
 
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        const relativePath = path.relative(workspaceRoot, filePath);
+        // Remove file cache
+        delete this.files[normalizedPath];
 
-        // Remove all cache entries for this file
-        const keysToDelete: string[] = [];
-        for (const [key, entry] of Object.entries(this.perFileCache)) {
-            if (entry.filePath === relativePath || entry.filePath === filePath) {
-                keysToDelete.push(key);
-            }
-        }
+        // Remove cross-file edges involving this file
+        this.crossFileEdges = this.crossFileEdges.filter(
+            e => e.sourceFile !== normalizedPath && e.targetFile !== normalizedPath
+        );
 
-        for (const key of keysToDelete) {
-            delete this.perFileCache[key];
-        }
-
-        await this.saveCache();
+        this.scheduleSave();
     }
 
     /**
-     * Get all cached graphs
+     * Clear all cache
      */
-    async getAllCachedGraphs(): Promise<WorkflowGraph[]> {
-        await this.initPromise;
-        return Object.values(this.perFileCache).map(entry => entry.graph);
+    async clear() {
+        this.files = {};
+        this.crossFileEdges = [];
+        this.workflows = {};
+        await this.saveNow();
     }
 
+    // =========================================================================
+    // Compatibility methods
+    // =========================================================================
+
     /**
-     * Get all cached file paths (absolute paths)
+     * Get all cached file paths
      */
     async getCachedFilePaths(): Promise<string[]> {
         await this.initPromise;
+        return Object.keys(this.files);
+    }
 
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            return [];
+    /**
+     * Update metadata for nodes in a cached file
+     */
+    updateMetadata(filePath: string, metadata: CachedMetadata) {
+        const normalizedPath = this.toFullPath(filePath);
+        const fileCache = this.files[normalizedPath];
+        if (!fileCache) return;
+
+        let updated = false;
+        for (const node of fileCache.nodes) {
+            const funcName = node.source?.function;
+            if (!funcName) continue;
+
+            // Update label if provided
+            if (metadata.labels[funcName] && metadata.labels[funcName] !== node.label) {
+                node.label = metadata.labels[funcName];
+                updated = true;
+            }
+
+            // Update description if provided
+            if (metadata.descriptions?.[funcName]) {
+                node.description = metadata.descriptions[funcName];
+                updated = true;
+            }
         }
 
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-        return Object.values(this.perFileCache).map(entry =>
-            path.isAbsolute(entry.filePath)
-                ? entry.filePath
-                : path.join(workspaceRoot, entry.filePath)
+        // Update edge labels
+        if (metadata.edgeLabels && Object.keys(metadata.edgeLabels).length > 0) {
+            for (const edge of fileCache.internalEdges) {
+                const edgeKey = `${edge.source}->${edge.target}`;
+                if (metadata.edgeLabels[edgeKey]) {
+                    edge.label = metadata.edgeLabels[edgeKey];
+                    updated = true;
+                }
+            }
+        }
+
+        if (updated) {
+            this.scheduleSave();
+        }
+    }
+
+    /**
+     * Prune stale entries for files that no longer exist
+     */
+    async pruneStaleEntries(existingFiles: string[]): Promise<number> {
+        await this.initPromise;
+
+        // Normalize input paths to match cache keys (always full paths)
+        const existingSet = new Set(existingFiles.map(fp => this.toFullPath(fp)));
+        const toDelete: string[] = [];
+
+        for (const filePath of Object.keys(this.files)) {
+            if (!existingSet.has(filePath)) {
+                toDelete.push(filePath);
+            }
+        }
+
+        for (const fp of toDelete) {
+            delete this.files[fp];
+        }
+
+        // Also prune cross-file edges
+        this.crossFileEdges = this.crossFileEdges.filter(
+            e => existingSet.has(e.sourceFile) && existingSet.has(e.targetFile)
         );
+
+        if (toDelete.length > 0) {
+            this.scheduleSave();
+        }
+
+        return toDelete.length;
+    }
+
+    /**
+     * Get cache stats for debugging
+     */
+    async getStats(): Promise<{ fileCount: number; nodeCount: number; edgeCount: number }> {
+        await this.initPromise;
+
+        let nodeCount = 0;
+        let edgeCount = 0;
+
+        for (const fc of Object.values(this.files)) {
+            nodeCount += fc.nodes.length;
+            edgeCount += fc.internalEdges.length;
+        }
+        edgeCount += this.crossFileEdges.length;
+
+        return {
+            fileCount: Object.keys(this.files).length,
+            nodeCount,
+            edgeCount
+        };
     }
 }

@@ -27,7 +27,7 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
             console.log(`[workflow-query] Querying workflow: "${input.workflowName}"`);
 
             // Get the complete workflow graph
-            const graph = await this.cacheManager.getMostRecentWorkflows();
+            const graph = await this.cacheManager.getMergedGraph();
             if (!graph) {
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart('No workflow data found. Please run visualization first.')
@@ -68,25 +68,6 @@ class WorkflowQueryTool implements vscode.LanguageModelTool<WorkflowQueryInput> 
             parts.push(formatWorkflow(workflow.name, workflowNodes, workflowEdges, filteredGraph));
             parts.push('');
 
-            // Entry/exit points summary
-            const entryNodes = workflowNodes.filter(n => n.isEntryPoint);
-            const exitNodes = workflowNodes.filter(n => n.isExitPoint);
-
-            if (entryNodes.length > 0) {
-                const entryLinks = entryNodes.map(n => {
-                    const sym = TYPE_SYMBOLS[n.type] || '□';
-                    return `${sym} ${createNodeLink(n.id, n.label)}`;
-                });
-                parts.push(`Entry: ${entryLinks.join(', ')}`);
-            }
-
-            if (exitNodes.length > 0) {
-                const exitLinks = exitNodes.map(n => {
-                    const sym = TYPE_SYMBOLS[n.type] || '□';
-                    return `${sym} ${createNodeLink(n.id, n.label)}`;
-                });
-                parts.push(`Exit: ${exitLinks.join(', ')}`);
-            }
 
             parts.push('');
             parts.push(formatLegend());

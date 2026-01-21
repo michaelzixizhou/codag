@@ -5,7 +5,7 @@ import { setupSVG } from './setup';
 import { layoutWorkflows } from './layout';
 import { renderGroups } from './groups';
 import { renderCollapsedComponents } from './components';
-import { renderEdges, updateEdgePaths } from './edges';
+import { renderEdges, updateEdgePaths, updateEdgeLabels } from './edges';
 import { renderNodes } from './nodes';
 import { dragstarted, dragged, dragended } from './drag';
 import { setupControls, fitToScreen, formatGraph } from './controls';
@@ -13,7 +13,7 @@ import { renderMinimap, setupMinimapZoomListener } from './minimap';
 import { setupClosePanel, closePanel } from './panel';
 import { setupMessageHandler } from './messages';
 import { updateGroupVisibility, updateComponentVisibility } from './visibility';
-import { ensureVisualCues, detectWorkflowGroups, updateSnapshotStats } from './workflow-detection';
+import { detectWorkflowGroups, updateSnapshotStats } from './workflow-detection';
 import { setupDirectory } from './directory';
 import { setupAuthHandlers } from './auth';
 
@@ -21,7 +21,7 @@ declare const d3: any;
 declare function acquireVsCodeApi(): any;
 
 // Initialize on load
-(function init() {
+(async function init() {
     // Get VSCode API
     const vscode = acquireVsCodeApi();
 
@@ -32,9 +32,6 @@ declare function acquireVsCodeApi(): any;
         console.error('No graph data found');
         return;
     }
-
-    // Ensure visual cues (entry/exit points, critical path)
-    ensureVisualCues(graphData);
 
     // Detect workflow groups
     const groups = detectWorkflowGroups(graphData);
@@ -47,8 +44,8 @@ declare function acquireVsCodeApi(): any;
     state.setGraphData(graphData);
     state.setWorkflowGroups(groups);
 
-    // Layout workflows using Dagre
-    layoutWorkflows(defs);
+    // Layout workflows using ELK (async)
+    await layoutWorkflows(defs);
 
     // Render groups (before edges/nodes for z-index)
     renderGroups();
@@ -106,7 +103,7 @@ declare function acquireVsCodeApi(): any;
 
     // Initial view - fit entire graph to screen
     setTimeout(() => {
-        // Reset layout to clean Dagre positions
+        // Reset layout to clean ELK positions
         formatGraph(updateGroupVisibility);
         renderMinimap();
         fitToScreen();
@@ -117,10 +114,12 @@ declare function acquireVsCodeApi(): any;
 
         // Force edge paths update (component edges need this)
         updateEdgePaths();
+        updateEdgeLabels();
 
         // Double-update after frame to catch any late renders
         requestAnimationFrame(() => {
             updateEdgePaths();
+            updateEdgeLabels();
         });
     }, 50);
 

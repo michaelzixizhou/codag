@@ -1,15 +1,15 @@
 // Message handler for extension communication
 import * as state from './state';
 import { computeGraphDiff, hasDiff } from './graph-diff';
-import { detectWorkflowGroups, updateSnapshotStats, ensureVisualCues } from './workflow-detection';
+import { detectWorkflowGroups, updateSnapshotStats } from './workflow-detection';
 import { openPanel } from './panel';
 import { layoutWorkflows } from './layout';
-import { renderGroups } from './groups';
-import { renderEdges } from './edges';
-import { renderNodes, pulseNodes } from './nodes';
+import { renderGroups, updateGroupsIncremental } from './groups';
+import { renderEdges, updateEdgesIncremental } from './edges';
+import { renderNodes, updateNodesIncremental, pulseNodes, applyFileChangeState, hydrateLabels } from './nodes';
 import { dragstarted, dragged, dragended } from './drag';
 import { renderMinimap, pulseMinimapNodes } from './minimap';
-import { fitToScreen } from './controls';
+import { fitToScreen, formatGraph } from './controls';
 import { updateGroupVisibility } from './visibility';
 import { populateDirectory, focusOnWorkflow } from './directory';
 import { getFilePicker } from './file-picker';
@@ -17,10 +17,15 @@ import { setAuthState, openAuthPanel, AuthState } from './auth';
 
 declare const d3: any;
 
+// Debounce state for updateGraph to prevent jitter from rapid updates
+let pendingGraphUpdate: any = null;
+let updateDebounceTimer: number | null = null;
+const UPDATE_DEBOUNCE_MS = 150;
+
 export function setupMessageHandler(): void {
     const { svg, zoom } = state;
 
-    window.addEventListener('message', (event: MessageEvent) => {
+    window.addEventListener('message', async (event: MessageEvent) => {
         const message = event.data;
         const indicator = document.getElementById('loadingIndicator');
         const iconSpan = indicator?.querySelector('.loading-icon') as HTMLElement;
@@ -111,215 +116,197 @@ export function setupMessageHandler(): void {
                 }, 4000);
                 break;
 
+            case 'fileStateChange':
+                // Handle live file change indicators
+                if (message.changes && Array.isArray(message.changes)) {
+                    message.changes.forEach((change: {
+                        filePath: string;
+                        functions?: string[];
+                        state: 'active' | 'changed' | 'unchanged'
+                    }) => {
+                        applyFileChangeState(change.filePath, change.functions, change.state);
+                    });
+                }
+                break;
+
+            case 'hydrateLabels':
+                // Handle metadata batch results - update node labels smoothly
+                if (message.filePath && message.labels) {
+                    // Find nodes from this file and update their labels
+                    const labelUpdates = new Map<string, string>();
+                    const { currentGraphData } = state;
+
+                    for (const node of currentGraphData.nodes) {
+                        if (node.source?.file === message.filePath) {
+                            // Match by function name
+                            const funcName = node.source.function;
+                            if (message.labels[funcName]) {
+                                labelUpdates.set(node.id, message.labels[funcName]);
+                            }
+                        }
+                    }
+
+                    if (labelUpdates.size > 0) {
+                        hydrateLabels(labelUpdates);
+
+                        // Show toast notification
+                        indicator.className = 'loading-indicator success';
+                        iconSpan.textContent = '✓';
+                        textSpan.textContent = `Updated ${labelUpdates.size} labels`;
+                        indicator.style.display = 'block';
+                        setTimeout(() => {
+                            indicator.style.display = 'none';
+                        }, 2000);
+                    }
+                }
+                break;
+
             case 'updateGraph':
                 if (message.preserveState && message.graph) {
-                    console.log('[webview] updateGraph: applying update');
+                    // Debounce rapid updates to prevent jitter
+                    pendingGraphUpdate = message.graph;
 
-                    // Compute diff for toast message
-                    const diff = computeGraphDiff(state.currentGraphData, message.graph);
-
-                    if (!hasDiff(diff)) {
-                        console.log('[webview] updateGraph: no changes detected');
-                        break;
+                    if (updateDebounceTimer !== null) {
+                        clearTimeout(updateDebounceTimer);
                     }
 
-                    // Show loading indicator with update summary (don't hide progress bar)
-                    const addedCount = diff.nodes.added.length;
-                    const removedCount = diff.nodes.removed.length;
-                    const parts = [];
-                    if (addedCount > 0) parts.push(`+${addedCount}`);
-                    if (removedCount > 0) parts.push(`-${removedCount}`);
+                    updateDebounceTimer = window.setTimeout(async () => {
+                        updateDebounceTimer = null;
+                        const graphToApply = pendingGraphUpdate;
+                        pendingGraphUpdate = null;
 
-                    indicator.className = 'loading-indicator';
-                    indicator.classList.remove('hidden');
-                    iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
-                    // Only update text if progress bar is not visible (batch analysis in progress)
-                    const updateProgressBar = indicator.querySelector('.progress-bar-container') as HTMLElement;
-                    if (!updateProgressBar || updateProgressBar.style.display === 'none') {
-                        textSpan.textContent = `Updating: ${parts.join(', ')} nodes`;
-                    }
-                    indicator.style.display = 'block';
+                        if (!graphToApply) return;
 
-                    // Preserve collapsed states from old groups
-                    const oldCollapsedIds = new Set(
-                        state.workflowGroups.filter((g: any) => g.collapsed).map((g: any) => g.id)
-                    );
+                        // Compute diff for toast message
+                        const diff = computeGraphDiff(state.currentGraphData, graphToApply);
 
-                    // Save existing node positions BEFORE updating graph data
-                    const savedPositions = new Map<string, { x: number; y: number }>();
-                    state.currentGraphData.nodes.forEach((node: any) => {
-                        if (typeof node.x === 'number' && typeof node.y === 'number') {
-                            savedPositions.set(node.id, { x: node.x, y: node.y });
+                        if (!hasDiff(diff)) {
+                            return;
                         }
-                    });
 
-                    // Ensure visual cues on new data
-                    ensureVisualCues(message.graph);
+                        // Show loading indicator with update summary (don't hide progress bar)
+                        const addedCount = diff.nodes.added.length;
+                        const removedCount = diff.nodes.removed.length;
+                        const parts = [];
+                        if (addedCount > 0) parts.push(`+${addedCount}`);
+                        if (removedCount > 0) parts.push(`-${removedCount}`);
 
-                    // Restore positions for existing nodes in new graph
-                    message.graph.nodes.forEach((node: any) => {
-                        const savedPos = savedPositions.get(node.id);
-                        if (savedPos) {
-                            node.x = savedPos.x;
-                            node.y = savedPos.y;
-                            node.fx = savedPos.x;
-                            node.fy = savedPos.y;
+                        indicator.className = 'loading-indicator';
+                        indicator.classList.remove('hidden');
+                        iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
+                        // Only update text if progress bar is not visible (batch analysis in progress)
+                        const updateProgressBar = indicator.querySelector('.progress-bar-container') as HTMLElement;
+                        if (!updateProgressBar || updateProgressBar.style.display === 'none') {
+                            textSpan.textContent = `Updating: ${parts.join(', ')} nodes`;
                         }
-                    });
+                        indicator.style.display = 'block';
 
-                    // Update graph data
-                    state.setGraphData(message.graph);
+                        // Preserve collapsed states from old groups
+                        const oldCollapsedIds = new Set(
+                            state.workflowGroups.filter((g: any) => g.collapsed).map((g: any) => g.id)
+                        );
 
-                    // Re-detect workflow groups
-                    const newWorkflowGroups = detectWorkflowGroups(message.graph);
+                        // Update graph data
+                        state.setGraphData(graphToApply);
 
-                    // Restore collapsed states
-                    newWorkflowGroups.forEach((g: any) => {
-                        if (oldCollapsedIds.has(g.id)) {
-                            g.collapsed = true;
-                        }
-                    });
+                        // Re-detect workflow groups
+                        const newWorkflowGroups = detectWorkflowGroups(graphToApply);
 
-                    state.setWorkflowGroups(newWorkflowGroups);
-
-                    // Clear all graph elements (keep pegboard bg and defs)
-                    state.g.selectAll('.groups, .collapsed-groups, .nodes-container, .edge-paths-container').remove();
-
-                    // Get defs from svg
-                    const defs = svg.select('defs');
-
-                    // Only run full layout if there are new nodes without positions
-                    const hasUnpositionedNodes = message.graph.nodes.some((n: any) =>
-                        typeof n.x !== 'number' || typeof n.y !== 'number'
-                    );
-
-                    if (hasUnpositionedNodes) {
-                        // Place new nodes near their connected neighbors
-                        const newNodes = diff.nodes.added;
-                        newNodes.forEach((newNode: any) => {
-                            if (typeof newNode.x === 'number' && typeof newNode.y === 'number') return;
-
-                            // Find connected edges
-                            const connectedEdges = message.graph.edges.filter((e: any) =>
-                                e.source === newNode.id || e.target === newNode.id
-                            );
-
-                            // Find neighbor positions
-                            const neighborPositions: { x: number; y: number }[] = [];
-                            connectedEdges.forEach((edge: any) => {
-                                const neighborId = edge.source === newNode.id ? edge.target : edge.source;
-                                const neighbor = message.graph.nodes.find((n: any) => n.id === neighborId);
-                                if (neighbor && typeof neighbor.x === 'number' && typeof neighbor.y === 'number') {
-                                    neighborPositions.push({ x: neighbor.x, y: neighbor.y });
-                                }
-                            });
-
-                            if (neighborPositions.length > 0) {
-                                // Place near average of neighbors with offset
-                                const avgX = neighborPositions.reduce((sum, p) => sum + p.x, 0) / neighborPositions.length;
-                                const avgY = neighborPositions.reduce((sum, p) => sum + p.y, 0) / neighborPositions.length;
-                                newNode.x = avgX + 100; // Offset to the right
-                                newNode.y = avgY + 50; // Slight offset down
-                                newNode.fx = newNode.x;
-                                newNode.fy = newNode.y;
-                            } else {
-                                // No neighbors, place at origin with offset based on existing nodes
-                                const existingNodes = message.graph.nodes.filter((n: any) =>
-                                    typeof n.x === 'number' && typeof n.y === 'number'
-                                );
-                                if (existingNodes.length > 0) {
-                                    const maxX = Math.max(...existingNodes.map((n: any) => n.x));
-                                    const minY = Math.min(...existingNodes.map((n: any) => n.y));
-                                    newNode.x = maxX + 150;
-                                    newNode.y = minY;
-                                } else {
-                                    newNode.x = 0;
-                                    newNode.y = 0;
-                                }
-                                newNode.fx = newNode.x;
-                                newNode.fy = newNode.y;
-                            }
-
-                            // Update in graph data
-                            const nodeInGraph = message.graph.nodes.find((n: any) => n.id === newNode.id);
-                            if (nodeInGraph) {
-                                nodeInGraph.x = newNode.x;
-                                nodeInGraph.y = newNode.y;
-                                nodeInGraph.fx = newNode.fx;
-                                nodeInGraph.fy = newNode.fy;
+                        // Restore collapsed states
+                        newWorkflowGroups.forEach((g: any) => {
+                            if (oldCollapsedIds.has(g.id)) {
+                                g.collapsed = true;
                             }
                         });
-                    }
 
-                    // Re-run layout only for workflow patterns (creates patterns, calculates bounds)
-                    layoutWorkflows(defs);
+                        state.setWorkflowGroups(newWorkflowGroups);
 
-                    // Restore saved positions AFTER layout to override dagre positions
-                    state.currentGraphData.nodes.forEach((node: any) => {
-                        const savedPos = savedPositions.get(node.id);
-                        if (savedPos) {
-                            node.x = savedPos.x;
-                            node.y = savedPos.y;
-                            node.fx = savedPos.x;
-                            node.fy = savedPos.y;
+                        // Get defs from svg
+                        const defs = svg.select('defs');
+
+                        // Run layout FIRST (calculates positions without touching DOM)
+                        await layoutWorkflows(defs);
+
+                        // Check if this is an additive-only update (batch analysis adds nodes, doesn't remove)
+                        const isAdditiveOnly = diff.nodes.removed.length === 0 && diff.edges.removed.length === 0;
+                        const structureChanged = diff.nodes.added.length > 0 || diff.nodes.removed.length > 0 ||
+                                               diff.edges.added.length > 0 || diff.edges.removed.length > 0;
+
+                        if (structureChanged && !isAdditiveOnly) {
+                            // Structure changed with removals - crossfade to new render
+                            const oldContainers = state.g.selectAll('.groups, .collapsed-groups, .nodes-container, .edge-paths-container, .edge-labels-container, .shared-arrows-container');
+
+                            // Render new elements (they'll be appended after old ones)
+                            renderGroups();
+                            renderEdges();
+                            renderNodes(dragstarted, dragged, dragended);
+
+                            // Get newly rendered containers (last of each type)
+                            const newGroups = state.g.select('.groups:last-of-type');
+                            const newNodes = state.g.select('.nodes-container:last-of-type');
+                            const newEdgePaths = state.g.select('.edge-paths-container:last-of-type');
+                            const newEdgeLabels = state.g.select('.edge-labels-container:last-of-type');
+
+                            // Start new elements invisible
+                            [newGroups, newNodes, newEdgePaths, newEdgeLabels].forEach(sel => {
+                                if (!sel.empty()) sel.style('opacity', 0);
+                            });
+
+                            // Crossfade: fade out old, fade in new
+                            oldContainers.transition().duration(150).style('opacity', 0).remove();
+                            [newGroups, newNodes, newEdgePaths, newEdgeLabels].forEach(sel => {
+                                if (!sel.empty()) sel.transition().duration(150).style('opacity', 1);
+                            });
+                        } else if (isAdditiveOnly && structureChanged) {
+                            // Additive-only update (batch analysis) - use incremental updates
+                            // This avoids the flickering by only adding/removing changed elements
+                            updateGroupsIncremental();
+                            updateEdgesIncremental();
+                            updateNodesIncremental(dragstarted, dragged, dragended);
+                        } else {
+                            // No structure change - just update positions in place (no blink)
+                            state.g.select('.nodes-container').selectAll('.node').each(function(this: SVGGElement, d: any) {
+                                const newData = state.currentGraphData.nodes.find((n: any) => n.id === d.id);
+                                if (newData) Object.assign(d, newData);
+                            });
+
+                            state.g.selectAll('.workflow-group').each(function(this: SVGGElement, d: any) {
+                                const newGroup = state.workflowGroups.find((g: any) => g.id === d.id);
+                                if (newGroup) Object.assign(d, newGroup);
+                            });
+
+                            state.g.selectAll('.link, .link-hover').each(function(this: SVGPathElement, d: any) {
+                                const newEdge = state.currentGraphData.edges.find((e: any) =>
+                                    e.source === d.source && e.target === d.target
+                                );
+                                if (newEdge) Object.assign(d, newEdge);
+                            });
+
+                            formatGraph();
                         }
-                    });
 
-                    // Also restore positions for expandedNodes (used by renderNodes)
-                    state.expandedNodes.forEach((node: any) => {
-                        const nodeId = node._originalId || node.id;
-                        const savedPos = savedPositions.get(nodeId);
-                        if (savedPos) {
-                            node.x = savedPos.x;
-                            node.y = savedPos.y;
-                            node.fx = savedPos.x;
-                            node.fy = savedPos.y;
-                        }
-                    });
+                        renderMinimap();
+                        updateGroupVisibility();
+                        updateSnapshotStats(state.workflowGroups, state.currentGraphData);
 
-                    // Also update originalPositions for existing nodes
-                    savedPositions.forEach((pos, nodeId) => {
-                        state.originalPositions.set(nodeId, pos);
-                    });
-
-                    // Re-render everything
-                    renderGroups();
-                    renderEdges();
-                    renderNodes(dragstarted, dragged, dragended);
-
-                    // Re-render minimap
-                    renderMinimap();
-
-                    // Apply group visibility
-                    updateGroupVisibility();
-
-                    // Pulse newly added nodes
-                    if (diff.nodes.added.length > 0) {
-                        const newNodeIds = diff.nodes.added.map((n: any) => n.id);
-                        setTimeout(() => {
+                        // Pulse newly added nodes
+                        if (diff.nodes.added.length > 0) {
+                            const newNodeIds = diff.nodes.added.map((n: any) => n.id);
                             pulseNodes(newNodeIds);
                             pulseMinimapNodes(newNodeIds);
-                        }, 100); // Small delay to ensure DOM is ready
-                    }
+                        }
 
-                    // Update header stats
-                    updateSnapshotStats(state.workflowGroups, state.currentGraphData);
-
-                    console.log('[webview] updateGraph: complete', {
-                        nodesAdded: addedCount,
-                        nodesRemoved: removedCount
-                    });
-
-                    // Show success
-                    indicator.className = 'loading-indicator success';
-                    iconSpan.textContent = '✓';
-                    textSpan.textContent = 'Graph updated';
-                    setTimeout(() => {
-                        indicator.classList.add('hidden');
-                        setTimeout(() => indicator.style.display = 'none', 300);
-                    }, 2000);
-                } else {
-                    console.log('[webview] updateGraph: no graph data or preserveState=false');
+                        // Show success (only if not in batch progress)
+                        if (!updateProgressBar || updateProgressBar.style.display === 'none') {
+                            indicator.className = 'loading-indicator success';
+                            iconSpan.textContent = '✓';
+                            textSpan.textContent = 'Graph updated';
+                            setTimeout(() => {
+                                indicator.classList.add('hidden');
+                                setTimeout(() => indicator.style.display = 'none', 300);
+                            }, 2000);
+                        }
+                    }, UPDATE_DEBOUNCE_MS);
                 }
                 break;
 
@@ -370,15 +357,8 @@ export function setupMessageHandler(): void {
                 }
                 break;
 
-            case 'updateFilePickerLLM':
-                if (message.llmFiles) {
-                    getFilePicker().updateLLMFiles(message.llmFiles);
-                }
-                break;
-
             case 'updateAuthState':
                 // Update auth state (trial tag, sign-up button)
-                console.log('[webview-msg] Received updateAuthState:', message.authState);
                 if (message.authState) {
                     setAuthState(message.authState as AuthState);
                 }
@@ -410,11 +390,6 @@ export function setupMessageHandler(): void {
                 getFilePicker().close(false);
 
                 if (message.graph) {
-                    console.log('[webview] initGraph: initializing with cached data');
-
-                    // Ensure visual cues on new data
-                    ensureVisualCues(message.graph);
-
                     // Update graph data
                     state.setGraphData(message.graph);
 
@@ -423,13 +398,13 @@ export function setupMessageHandler(): void {
                     state.setWorkflowGroups(groups);
 
                     // Clear all graph elements
-                    state.g.selectAll('.groups, .collapsed-groups, .nodes-container, .edge-paths-container').remove();
+                    state.g.selectAll('.groups, .collapsed-groups, .nodes-container, .edge-paths-container, .edge-labels-container').remove();
 
                     // Get defs from svg
                     const defs = svg.select('defs');
 
                     // Run layout
-                    layoutWorkflows(defs);
+                    await layoutWorkflows(defs);
 
                     // Render everything
                     renderGroups();

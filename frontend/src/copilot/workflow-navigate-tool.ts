@@ -31,7 +31,7 @@ class WorkflowNavigateTool implements vscode.LanguageModelTool<WorkflowNavigateI
             console.log('[workflow-navigate] Operation:', input.operation);
 
             // Get the complete workflow graph
-            const graph = await this.cacheManager.getMostRecentWorkflows();
+            const graph = await this.cacheManager.getMergedGraph();
             if (!graph) {
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart('No workflow data found. Please run visualization first.')

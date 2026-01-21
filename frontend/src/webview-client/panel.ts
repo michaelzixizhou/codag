@@ -110,29 +110,19 @@ export function openPanel(nodeData: any): void {
         incoming.innerHTML = incomingEdges.map((edge: any) => {
             const sourceNode = currentGraphData.nodes.find((n: any) => n.id === edge.source);
             return `<div style="margin: 8px 0; padding: 8px; background: var(--vscode-input-background); border-radius: 4px;">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
-                    ${edge.sourceLocation ? `<a href="#" class="source-link incoming-data-link" data-file="${edge.sourceLocation.file}" data-line="${edge.sourceLocation.line}"><strong>${edge.label}</strong></a>` : `<strong>${edge.label}</strong>`}
-                    ${edge.dataType ? `<span style="font-size: 10px; padding: 2px 6px; background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-editor-foreground)); color: var(--vscode-editor-foreground); border-radius: 3px;">${edge.dataType}</span>` : ''}
+                <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;">From: ${sourceNode ? sourceNode.label : edge.source}</div>
+                ${edge.label ? `<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                    <span style="font-size: 10px; padding: 2px 6px; background: #7c3aed; color: white; border-radius: 3px;">${edge.label}</span>
+                    ${edge.condition ? `<span style="font-size: 10px; color: var(--vscode-descriptionForeground);"><code>${edge.condition}</code></span>` : ''}
+                </div>` : ''}
+                ${edge.payload ? `<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <strong><code>${edge.payload.name}</code></strong>
+                    <span style="font-size: 10px; padding: 2px 6px; background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-editor-foreground)); color: var(--vscode-editor-foreground); border-radius: 3px;">${edge.payload.type}</span>
                 </div>
-                <div style="font-size: 11px; color: var(--vscode-descriptionForeground);">From: ${sourceNode ? sourceNode.label : edge.source}</div>
-                ${edge.description ? `<div style="font-size: 11px; margin-top: 4px; font-style: italic;">${edge.description}</div>` : ''}
+                ${edge.payload.description ? `<div style="font-size: 11px; margin-top: 4px; font-style: italic;">${edge.payload.description}</div>` : ''}` : ''}
+                ${!edge.label && !edge.payload ? '<div style="font-size: 11px; color: var(--vscode-descriptionForeground);">Control flow</div>' : ''}
             </div>`;
         }).join('');
-
-        // Add event listeners
-        incoming.querySelectorAll('.incoming-data-link').forEach((link, index) => {
-            const edge = incomingEdges[index];
-            (link as HTMLAnchorElement).onclick = (e) => {
-                e.preventDefault();
-                if (edge.sourceLocation) {
-                    vscode.postMessage({
-                        command: 'openFile',
-                        file: edge.sourceLocation.file,
-                        line: edge.sourceLocation.line
-                    });
-                }
-            };
-        });
 
         incomingSection.style.display = 'block';
     } else {
@@ -154,29 +144,19 @@ export function openPanel(nodeData: any): void {
         outgoing.innerHTML = outgoingEdges.map((edge: any) => {
             const targetNode = currentGraphData.nodes.find((n: any) => n.id === edge.target);
             return `<div style="margin: 8px 0; padding: 8px; background: var(--vscode-input-background); border-radius: 4px;">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
-                    ${edge.sourceLocation ? `<a href="#" class="source-link outgoing-data-link" data-file="${edge.sourceLocation.file}" data-line="${edge.sourceLocation.line}"><strong>${edge.label}</strong></a>` : `<strong>${edge.label}</strong>`}
-                    ${edge.dataType ? `<span style="font-size: 10px; padding: 2px 6px; background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-editor-foreground)); color: var(--vscode-editor-foreground); border-radius: 3px;">${edge.dataType}</span>` : ''}
+                <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;">To: ${targetNode ? targetNode.label : edge.target}</div>
+                ${edge.label ? `<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                    <span style="font-size: 10px; padding: 2px 6px; background: #7c3aed; color: white; border-radius: 3px;">${edge.label}</span>
+                    ${edge.condition ? `<span style="font-size: 10px; color: var(--vscode-descriptionForeground);"><code>${edge.condition}</code></span>` : ''}
+                </div>` : ''}
+                ${edge.payload ? `<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <strong><code>${edge.payload.name}</code></strong>
+                    <span style="font-size: 10px; padding: 2px 6px; background: color-mix(in srgb, var(--vscode-editor-background) 85%, var(--vscode-editor-foreground)); color: var(--vscode-editor-foreground); border-radius: 3px;">${edge.payload.type}</span>
                 </div>
-                <div style="font-size: 11px; color: var(--vscode-descriptionForeground);">To: ${targetNode ? targetNode.label : edge.target}</div>
-                ${edge.description ? `<div style="font-size: 11px; margin-top: 4px; font-style: italic;">${edge.description}</div>` : ''}
+                ${edge.payload.description ? `<div style="font-size: 11px; margin-top: 4px; font-style: italic;">${edge.payload.description}</div>` : ''}` : ''}
+                ${!edge.label && !edge.payload ? '<div style="font-size: 11px; color: var(--vscode-descriptionForeground);">Control flow</div>' : ''}
             </div>`;
         }).join('');
-
-        // Add event listeners
-        outgoing.querySelectorAll('.outgoing-data-link').forEach((link, index) => {
-            const edge = outgoingEdges[index];
-            (link as HTMLAnchorElement).onclick = (e) => {
-                e.preventDefault();
-                if (edge.sourceLocation) {
-                    vscode.postMessage({
-                        command: 'openFile',
-                        file: edge.sourceLocation.file,
-                        line: edge.sourceLocation.line
-                    });
-                }
-            };
-        });
 
         outgoingSection.style.display = 'block';
     } else {

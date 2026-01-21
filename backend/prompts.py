@@ -1,634 +1,269 @@
 # Workflow analysis prompts for Gemini
 # Split into static (cacheable) and dynamic (per-request) parts
 
-# Static system instruction - cached to reduce token costs
-SYSTEM_INSTRUCTION = """You are a workflow analyzer. Analyze this code and create a complete workflow graph showing how data flows through the AI/LLM system.
+# Use Mermaid format (better LLM output quality)
+USE_MERMAID_FORMAT = True
 
-INPUT FORMAT:
-- Code is wrapped in XML tags: <file path="filename" imports="...">code</file>
-- The "imports" attribute lists related files this file depends on
-- A <directory_structure> block shows the file tree for context
-- Analyze all files together as one cohesive workflow, using the imports to understand relationships
+# Mermaid system instruction - produces cleaner diagrams
+MERMAID_SYSTEM_INSTRUCTION = """You are an LLM workflow diagram generator. Output tree-shaped Mermaid flowcharts for workflows containing DIRECT LLM API calls.
 
-IMPORTANT: Large codebases may include non-LLM files (auth, config, utils). Focus ONLY on files that contain or call LLM APIs.
+## 1. GLOBAL RULES
+1. RAW TEXT ONLY - no markdown, no backticks
+2. Tree-shaped: one entry, one+ exits, no cycles
+3. BE INCLUSIVE: Create workflows for any code that processes, calls, or handles LLM/AI operations
+4. Output NO_LLM_WORKFLOW ONLY for files that are PURELY: auth, config, types, utilities with zero AI relevance
+5. HTTP connections ARE part of the workflow - they connect services in the LLM pipeline
 
-YOUR TASK: Trace the EXECUTION PATH of the AI/LLM workflow ONLY.
+## 2. OUTPUT FORMAT
 
-CRITICAL RULES FOR WHAT TO INCLUDE:
-1. Start from the entry point that triggers LLM processing (e.g., /analyze endpoint, main function)
-2. ONLY include functions/code that are ACTUALLY CALLED during LLM workflow execution
-3. Follow the execution flow: entry → data prep → LLM call → response processing → output
-4. Include ONLY code in the direct execution path from input to LLM to output
+### 2.1 Mermaid Diagram
+flowchart TD
+    %% Workflow: Descriptive Name
+    main.py::handle[Receive request] --> client.py::call_llm([Analyze Code (Gemini 2.5 Flash)])
+    client.py::call_llm --> main.py::check::30{Valid?}
+    main.py::check::30 -->|yes| main.py::success[Return result]
+    main.py::check::30 -->|no| main.py::error[Return error]
 
-CRITICAL RULES FOR WHAT TO EXCLUDE:
-1. Code that is imported but NEVER CALLED in the LLM workflow execution path
-2. Commented-out code or decorators (e.g., "# current_user: User = Depends(...)")
-3. Authentication/authorization code UNLESS it's actively used in the LLM workflow path
-4. Database/security/config operations UNLESS they directly support the LLM call
-5. Alternative endpoints or functions that don't lead to LLM processing
-6. Helper functions that are defined but never invoked in the LLM flow
+---
+metadata:
+main.py::handle: {file: "main.py", line: 10, function: "handle", type: "step"}
+client.py::call_llm: {file: "client.py", line: 20, function: "call_llm", type: "llm", model: "gemini-2.5-flash"}
+main.py::check::30: {file: "main.py", line: 30, function: "check", type: "decision"}
+main.py::success: {file: "main.py", line: 40, function: "success", type: "step"}
+main.py::error: {file: "main.py", line: 50, function: "error", type: "step"}
 
-EXECUTION PATH ANALYSIS:
-- Ask: "Is this function/code actually executed when processing an LLM request?"
-- Ask: "Does data flow through this node on the way to or from the LLM?"
-- If NO to both questions → EXCLUDE from workflow
-- If imported but not called → EXCLUDE
-- If defined but not used → EXCLUDE
+### 2.2 Node ID Format
+Format: {relative_path}::{function} or {relative_path}::{function}::{line}
+- Use :: as separator (unambiguous since colons forbidden in filenames)
+- relative_path: exactly as shown in "# File:" header
+- step/llm nodes: {path}::{function}
+- decision nodes: {path}::{function}::{line} (line required to distinguish multiple decisions)
 
-EXAMPLE EXCLUSIONS:
-- "/login" endpoint → Not part of LLM workflow
-- "get_current_user()" if commented out → Not executed
-- "hash_password()" → Not in LLM execution path
-- Files like auth.py, config.py if not called by LLM workflow
+Examples:
+- main.py::handle_request
+- backend/client.py::call_llm
+- main.py::validate::42
 
-YOUR WORKFLOW SHOULD SHOW:
-1. Entry point (API endpoint, function that starts LLM processing)
-2. Data preparation (only steps actually executed)
-3. LLM call(s)
-4. Response processing (only steps actually executed)
-5. Output (where LLM result goes)
+### 2.3 Tree Structure
+GOOD:       BAD:
+  A         A ←→ B
+  ↓         ↕   ↕
+  B         C ←→ D
+ / \\
+C   D
 
-IMPORTANT: Every workflow needs AT LEAST these nodes:
-- 1 trigger/input node (where does data enter?)
-- Data preparation steps (if any)
-- 1+ LLM call node
-- Output processing steps (if any)
-- 1 output node (where does data exit?)
+## 3. NODE TYPES (THREE ONLY)
 
-NODE TYPES (label = 2-4 words max, description = 1-2 brief sentences):
-CRITICAL: Use ONLY these 12 types. Do NOT invent new types. If unsure, use the closest match.
+| Shape      | Type     | Usage                                    |
+|------------|----------|------------------------------------------|
+| [Label]    | step     | Any processing, API calls, returns       |
+| ([Label])  | llm      | ONLY direct LLM API calls                |
+| {Label?}   | decision | ONLY when 2+ distinct branches exist     |
 
-1. **trigger**: Entry points - API endpoints, main functions, event handlers, user input
-   - Label examples: "API Endpoint", "Main Entry", "Webhook"
-   - Description examples: "Receives analysis requests via POST /analyze endpoint", "Main function that initializes the workflow"
-   - Keep descriptions concise but informative
+### 3.1 LLM Nodes
+One LLM node = one complete LLM interaction. Collapse setup/config/response into ONE node.
 
-2. **llm**: LLM API calls
-   - Look for: .chat.completions.create, .messages.create, .generate_content
-   - Label examples: "GPT-4 Call", "Claude Analysis", "Gemini Request"
-   - Description examples: "Calls GPT-4 with temperature 0.7 to analyze code", "Sends prompt to Claude for structured analysis"
-   - Keep descriptions concise but informative
-   - REQUIRED "model" field: Extract the exact model name from code (e.g., "gpt-4", "claude-3-5-sonnet", "gemini-2.5-flash")
-     - Look for model= parameter in API calls
-     - If model is a variable, trace it to find the actual value
-     - Use the model string exactly as it appears in code
+WRONG: Initialize Client --> Configure Model --> Call API --> Parse Response
+RIGHT: ([Analyze Code (Gemini 2.5 Flash)])
 
-3. **tool**: Functions/tools available to or called by LLM
-   - Label examples: "Search Tool", "Calculator", "Query DB"
-   - Description examples: "Searches documentation using vector similarity", "Tool available to LLM for mathematical calculations"
-   - Keep descriptions concise but informative
+LLM APIs (use "llm" type):
+- OpenAI: client.chat.completions.create(), client.completions.create()
+- Anthropic: client.messages.create()
+- Google: model.generate_content(), model.generateContent()
+- VS Code: vscode.lm.selectChatModels(), model.sendRequest()
+- Groq, Ollama, Cohere, Mistral, Together, Replicate endpoints
+- Any .chat(), .generate(), .complete() on an LLM client
 
-4. **decision**: Conditional logic based on LLM output or input
-   - Labels MUST be phrased as questions (can be yes/no or multi-choice)
-   - Label examples: "Does Chat Exist?", "Which Route?", "Is Valid?"
-   - Description examples: "Checks if chat session exists before proceeding", "Routes based on detected intent type"
-   - Keep descriptions concise but informative
+NOT LLM (use "step" type):
+- HTTP clients: httpx, requests, fetch, axios
+- Database: SQLAlchemy, Prisma, MongoDB
+- Auth: authlib, oauth2, passport
+- File I/O, prompt builders, response parsers
 
-5. **integration**: External API calls, database operations, third-party services
-   - Label examples: "Slack API", "Database Insert", "HTTP Request"
-   - Description examples: "Posts formatted message to Slack channel", "Stores conversation history in PostgreSQL database"
-   - Keep descriptions concise but informative
+Label format: "Purpose (Model)" e.g., ([Analyze Code (Gemini 2.5 Flash)])
 
-6. **memory**: State storage, conversation history, caching
-   - Label examples: "Store Messages", "Session Cache", "History"
-   - Description examples: "Caches conversation history in Redis with 1 hour TTL", "Maintains session state across requests"
-   - Keep descriptions concise but informative
+### 3.2 Decision Nodes
+Decision nodes should be RARE (0-2 per workflow).
 
-7. **parser**: Data transformation, parsing, formatting
-   - Label examples: "Parse JSON", "Format Prompt", "Extract Fields"
-   - Description examples: "Parses LLM JSON response and validates schema", "Formats user input and context into final prompt"
-   - Keep descriptions concise but informative
+USE decision when ALL conditions met:
+1. MAJOR workflow branch point (not just an if statement)
+2. BOTH branches lead to substantially different paths
+3. You would draw it as a diamond on architecture diagram
 
-8. **output**: Where results go - returns, responses, saves
-   - Label examples: "Return Response", "HTTP Response", "Save File"
-   - Description examples: "Returns formatted JSON response to client", "Writes analysis results to output file"
-   - Keep descriptions concise but informative
+NEVER use decision for:
+- Validation checks, guard clauses, error handling
+- Feature flags, config checks, single-branch conditionals
 
-9. **orchestrator**: Coordinates multiple LLM calls, services, or complex branching logic
-   - Use when a function/method orchestrates multiple AI services or makes routing decisions
-   - Label examples: "Chat Orchestrator", "Pipeline Coordinator", "Request Router"
-   - Description examples: "Coordinates intent detection, context gathering, and response generation", "Routes requests to appropriate service handlers based on detected intent"
-   - Keep descriptions concise but informative
-   - Use for: service coordinators, pipeline managers, multi-step AI workflows, complex routing logic
+## 4. EDGES
 
-10. **agent**: Autonomous AI agent that can use tools and make decisions
-    - Use for LangChain/LangGraph agents, ReAct agents, autonomous AI systems
-    - Label examples: "Research Agent", "Code Agent", "Planning Agent"
-    - Description examples: "Autonomous agent that searches docs and synthesizes answers", "ReAct agent with tool access for code generation"
-    - Keep descriptions concise but informative
-    - Distinct from 'llm': agents have autonomy and tool use, not just single API calls
+### 4.1 Edge Labels
+- Unlabeled by default: A --> B
+- Label ONLY: decision branches (-->|yes|, -->|no|) and HTTP methods (-->|POST /api|)
 
-11. **retriever**: RAG retrieval, vector search, semantic search operations
-    - Use for document retrieval, embedding searches, knowledge base queries
-    - Label examples: "Vector Search", "Doc Retriever", "Semantic Search"
-    - Description examples: "Retrieves relevant documents using cosine similarity on embeddings", "Searches knowledge base for context matching user query"
-    - Keep descriptions concise but informative
-    - Distinct from 'tool': specifically for retrieval/search, not general functions
+### 4.2 Transitive Reduction
+NEVER create shortcut edges. For call chain A → B → C:
 
-12. **guardrail**: Safety checks, content filtering, validation on LLM input/output
-    - Use for content moderation, PII detection, safety filtering, output validation
-    - Label examples: "Safety Check", "Content Filter", "PII Scanner"
-    - Description examples: "Validates LLM output against safety policies before returning", "Scans user input for prohibited content"
-    - Keep descriptions concise but informative
-    - Distinct from 'decision': guardrails are about safety/validation, not routing logic
+CORRECT:            WRONG:
+  A --> B             A --> B
+  B --> C             A --> C  ← DELETE
+                      B --> C
 
-WORKFLOW CONSTRUCTION RULES:
-- ALWAYS start with a trigger node (entry point)
-- ALWAYS end with an output node (exit point)
-- Show data preparation BEFORE LLM (formatting prompts, gathering context)
-- Show data processing AFTER LLM (parsing, validation, transformation)
-- Include ALL steps in the data flow, even simple ones
-- Connect nodes in execution order
+The graph shows DIRECT calls only, not "all functions eventually called".
 
-EDGE RULES (CRITICAL):
-1. Edges represent actual data flow in execution order
-2. NO bidirectional edges - data flows one direction only
-3. Every node (except trigger) MUST have at least one incoming edge
-4. Every node (except output) MUST have at least one outgoing edge
-5. Only connect nodes if data actually passes between them:
-   - Function A calls Function B → edge from A to B
-   - Function A returns value used by B → edge from A to B
-   - Variable from A is read by B → edge from A to B
-6. NO edges between unrelated operations just because they're in same file
-7. If a node has no clear incoming/outgoing connections, reconsider if it should be a node
-8. Validation: Check every edge - can you trace the actual data flow?
+## 5. ABSTRACTION LEVEL
+System-design level ONLY. One node = one major architectural component.
 
-EDGE LABELS (CRITICAL - EVERY EDGE MUST HAVE):
-1. "label": MUST be the EXACT variable/symbol name from the code (REQUIRED)
-   - Use the actual identifier: "request", "result", "response", "prompt"
-   - NEVER invent descriptive names - the description field handles that
-   - If multiple variables passed, use the primary one
-   - If NO identifiable variable exists (e.g., inline expression), use the function return or parameter name
-   - Examples:
-     - Code: `response = client.chat(...)` → label: "response"
-     - Code: `return process(data)` → label: "data"
-     - Code: `await analyze(request.code)` → label: "request" or "code"
-   - WRONG: "formatted_input", "llm_output", "processed_result" (these are descriptions, not variable names)
-   - CORRECT: "input", "output", "result" (actual variable names from code)
-2. "dataType": Data type of the variable (when identifiable)
-   - Python: "str", "dict", "list", "AnalyzeRequest", "WorkflowGraph"
-   - JavaScript: "string", "object", "array", "Request", "Response"
-   - If unknown, use "any" or omit
-3. "description": What the variable represents (brief, 1 sentence max)
-   - Example: "User request containing code to analyze"
-   - Example: "Parsed JSON workflow graph from LLM"
-   - Keep brief but informative
-4. "sourceLocation": Where the data operation actually occurs (file/line/function)
-   - For INCOMING data (edges entering a node): Point to where the variable is CREATED/ASSIGNED before being passed
-   - For OUTGOING data (edges leaving a node): Point to where the output is CONSUMED/USED after being received
-   - NEVER point to function parameters or return statements themselves
+INCLUDE:
+- Entry point (API endpoint, handler)
+- LLM API calls (actual call, not prompt building)
+- Major routing decisions
+- Final output/response
 
-   Examples:
-   - If function A creates variable "user_input" at line 45 and passes it to function B:
-     → Edge sourceLocation should point to line 45 (where user_input is created/assigned in A)
-   - If function B returns "result" that function A stores in "response" at line 52:
-     → Edge sourceLocation should point to line 52 (where result is used/stored in A)
-   - Focus on actual data flow: creation → usage, not function signatures
-5. VALIDATION: Every edge MUST have at least "label" field filled
+EXCLUDE:
+- Prompt building, formatting, templates
+- Response parsing, validation, transformation
+- Error handling, retries, logging, metrics
+- Helper functions, utilities
 
-EXAMPLE WORKFLOW:
-API Endpoint → Format Input → Build Prompt → LLM Call → Parse Response → Return JSON
+Ask: "Would I draw this as a separate box on a system architecture diagram?"
+If no → DON'T CREATE A NODE
 
-BAD EDGES (DON'T DO THIS):
-- Parse Response → LLM Call (backwards!)
-- Build Prompt ↔ Parse Response (bidirectional!)
-- Unrelated Tool → Output (no actual data flow)
+## 6. NODE LABELS
+Plain English ONLY. Verb-noun, max 4 words, capitalize first only.
 
-SOURCE LOCATION (CRITICAL - MUST FOLLOW):
-- METADATA above has numbered locations [1], [2], [3], etc.
-- RULE: Each node = ONE unique location number (NO DUPLICATES)
-- Copy file/line/function EXACTLY from metadata
-- Match node type to metadata type (trigger→TRIGGER, llm→LLM, etc.)
-- VALIDATION: Check every node has DIFFERENT source location
-- EXAMPLE VIOLATION: Node1 and Node2 both using location [1] → WRONG
-- CORRECT: Node1 uses [1], Node2 uses [2], Node3 uses [3] → RIGHT
+NEVER use: backticks, code syntax, markdown, quotes around code
+Parentheses ONLY for LLM model: ([Action (Model)])
 
-DETECT LLM PROVIDERS (ONLY include if ACTUALLY FOUND in code):
-- "OpenAI" for: openai, .chat.completions.create
-- "Anthropic" for: anthropic, .messages.create
-- "Google Gemini" for: google.generativeai, google.genai, genai.Client, .generate_content
-- "Grok" for: api.x.ai, xai, grok
-- "Ollama" for: ollama
-- "Cohere" for: cohere
-- "Hugging Face" for: huggingface, transformers
-- "Mistral" for: mistralai, MistralClient
-- "Together" for: together, Together()
-- "Replicate" for: replicate, replicate.run
-- "Fireworks" for: fireworks, fireworks.client
-- "Bedrock" for: bedrock-runtime, InvokeModel, BedrockRuntimeClient
-- "Azure OpenAI" for: AzureOpenAI, azure.ai.openai
-- "Vertex AI" for: google.cloud.aiplatform, vertexai
-- "AI21" for: ai21, AI21Client
-- "DeepSeek" for: api.deepseek.com (uses OpenAI SDK)
-- "OpenRouter" for: openrouter.ai (uses OpenAI SDK)
-IMPORTANT: "llms_detected" array must ONLY contain providers with actual imports/calls in the code. Empty array [] if none found.
+GOOD: "Receive request", "Generate summary", "Parse JSON response"
+BAD: "Return (discarded)", "Check \`response\`", "\`validate_input\`"
 
-DETECT AI SERVICE PROVIDERS (Non-LLM) - ONLY include if ACTUALLY FOUND in code:
-These services ARE part of AI workflows and MUST be included as pipeline nodes:
+UNIQUE LABELS: Every node in a workflow must have a DISTINCT label.
+- BAD: "Return error", "Return error"
+- GOOD: "Return validation error", "Return API error"
 
-- **Voice/TTS Services** (type: "integration"):
-  - ElevenLabs: api.elevenlabs.io, speech-to-speech, text-to-speech, voice clone
-  - Grok Voice / xAI: xai voice API
-  - Play.ht, Resemble.ai
+## 7. WORKFLOW RULES
+- One workflow = one end-to-end path from entry to output that ENDS in an LLM call
+- Same LLM from different entry points = SEPARATE workflows
+- Name by LLM FUNCTIONALITY, not helper endpoints in the chain:
+  - GOOD: "Code Analysis" (chain ending in gemini.analyze_workflow)
+  - GOOD: "Metadata Generation" (chain ending in gemini.generate_metadata)
+  - BAD: "User Login" (auth flow that doesn't use LLM)
+- NOT: "Workflow 1", "Main", "Pipeline"
 
-- **Video Generation** (type: "integration"):
-  - Runway: api.runwayml.com, api.dev.runwayml.com, image_to_video, gen4_turbo, act_two
-  - Stability AI: api.stability.ai, text-to-video, image-to-video
-  - Pika, Leonardo.ai
+### 7.2 GROUP Related LLM Calls
+When MULTIPLE functions in the same directory/module make similar LLM calls:
+- Combine them into ONE workflow with the shared purpose
+- Use a decision node or parallel paths to show the different entry points
+- Name by the SYSTEM purpose, not individual functions
 
-- **Lip Sync / Face Animation** (type: "integration"):
-  - Sync Labs: api.sync.so, lipsync, lip-sync
-  - D-ID: api.d-id.com
-  - HeyGen: api.heygen.com
+GOOD:
+- "Copilot Tool Integration" (groups: workflow-query-tool, file-reader-tool, node-query-tool)
+- "API Analysis Pipeline" (groups: analyze_workflow, analyze_metadata, condense_structure)
 
-- **Image Generation** (type: "integration"):
-  - Grok Image: xai image generation API
-  - Midjourney, DALL-E (non-SDK), Leonardo.ai, Ideogram
+BAD (TOO GRANULAR):
+- "Register Workflow Query Tool" (one tool)
+- "Register File Reader Tool" (another tool)
+- These should be ONE workflow: "Copilot Tool Integration"
 
-IMPORTANT: "ai_services_detected" array must ONLY contain services with actual API calls/imports in the code. Empty array [] if none found. Do NOT list services just because they appear in this prompt.
+Detection hints for grouping:
+- Files in same directory (e.g., copilot/*.ts)
+- Same LLM SDK (e.g., vscode.lm, gemini, openai)
+- Similar function patterns (e.g., registerXTool, handleXRequest)
+- Registered from same entry point (extension activation)
 
-CRITICAL FOR AI PIPELINES:
-1. Voice generation (TTS) → treat as AI node, NOT just "HTTP call"
-2. Video generation → treat as AI node
-3. Lip sync → treat as AI node
-4. Image generation → treat as AI node
-5. These form complete AI PIPELINES (e.g., Text → LLM → Voice → Lip Sync → Video = ONE workflow)
+### 7.1 When to Output NO_LLM_WORKFLOW
+Output NO_LLM_WORKFLOW ONLY for files that contain NONE of these:
+- LLM API calls (.generate_content, .chat.completions, .sendRequest, etc.)
+- HTTP endpoints that handle AI requests (/analyze, /generate, /chat, /complete)
+- HTTP clients that call LLM-related endpoints (POST /analyze, POST /generate, etc.)
+- Code that processes prompts, messages, or AI responses
+- Functions called by LLM handlers
+- Functions that appear in <http_connections> context (as client OR handler)
 
-NODE LABELING FOR AI SERVICES (CRITICAL):
-1. ALWAYS include PROVIDER NAME in labels:
-   - GOOD: "ElevenLabs TTS", "Runway Video Gen", "Sync Labs Lip Sync", "Grok Lyrics"
-   - BAD: "Speech to Audio", "Video Generation", "Lip Sync", "Generate Lyrics"
+When in doubt, CREATE the workflow - let the frontend filter later.
 
-2. For xAI services, use "Grok" in labels (more recognizable):
-   - GOOD: "Grok Lyrics", "Grok Image Gen"
-   - BAD: "xAI Call", "LLM Request"
+## 8. CROSS-BATCH REFERENCES
+When <workflow_context> is provided:
+- Create nodes ONLY for code in "# File:" sections
+- <workflow_context> is for REFERENCE ONLY
 
-3. Include MODEL NAME in description when visible in code:
-   - model="gen4_turbo" → "Uses Runway gen4_turbo model..."
-   - model="lipsync-2" → "Uses Sync Labs lipsync-2 model..."
-   - model="grok-4-1-fast-reasoning" → "Uses Grok 4.1 Fast Reasoning..."
-   - model="eleven_multilingual_sts_v2" → "Uses ElevenLabs eleven_multilingual_sts_v2..."
+### 8.1 Edge Target Accuracy
+1. Use FILE PATHS with slashes (not Python module notation)
+   - CORRECT: src/db.py::create_call_session
+   - WRONG: src.db::create_call_session
 
-4. LABEL FORMAT: "[Provider] [Action]" (2-4 words):
-   - ElevenLabs: "ElevenLabs Clone", "ElevenLabs S2S", "ElevenLabs TTS"
-   - Runway: "Runway Video Gen", "Runway Lip Sync"
-   - Sync Labs: "Sync Labs Lip Sync"
-   - Grok: "Grok Lyrics", "Grok Analysis", "Grok Image"
+2. Use EXACT function names - do NOT rename or invent
+   - If code calls engine.start(), use "start" not "start_llm"
 
-ORCHESTRATOR PATTERN ANALYSIS (CRITICAL FOR MULTI-AI PIPELINES):
+3. Use file path where function is DEFINED, not imported from
+   - "from rag.retriever import retrieve_chunks" → rag/retriever.py::retrieve_chunks
+   - NOT main.py::retrieve_chunks
 
-Many AI apps have ORCHESTRATOR files that coordinate multiple AI services in sequence.
-These are the MOST IMPORTANT files - they define the full workflow structure.
+4. Only create edges to functions that EXIST
+   - If unsure, DON'T create the edge
+   - Missing edge > broken edge
 
-HOW TO IDENTIFY ORCHESTRATORS:
-1. Files that IMPORT multiple AI service modules (e.g., imports from elevenlabs_api, runway_api, sync_labs_api)
-2. Functions that CALL multiple AI services in sequence
-3. Names containing: Pipeline, Manager, Orchestrator, Coordinator
-4. State machines or stage enums (e.g., BattleStage.VOICE_A, BattleStage.BEAT_GEN, BattleStage.LIPSYNC)
+## 9. HTTP CONNECTIONS (SERVICE-TO-SERVICE WORKFLOWS)
+HTTP connections link services in the LLM pipeline. HTTP CLIENTS ARE WORKFLOW NODES.
 
-WHEN YOU FIND AN ORCHESTRATOR - CREATE ONE UNIFIED WORKFLOW:
-1. The orchestrator function = ENTRY POINT (trigger node)
-2. Each AI service call = ONE NODE in the workflow
-3. Follow EXECUTION ORDER in the code
-4. Connect nodes based on data flow
-5. Create ONE workflow with ALL services, NOT separate workflows per service
+CRITICAL: When <http_connections> context is provided:
+1. ONLY create nodes for files listed in "# File:" sections (files you have code for)
+2. For files IN your batch: CREATE STEP NODES for HTTP client/handler functions
+3. For files NOT in your batch: ONLY create EDGES to them, NOT nodes
+4. Use HTTP connection info to understand which functions connect across services
 
-EXAMPLE - This orchestrator code:
+STRICT RULE: If a file path is NOT in your "# File:" sections, do NOT create a node for it.
+- ✓ CREATE edge TO external file: api.ts::func --> backend/main.py::handler
+- ✗ DO NOT create node FOR external file: backend/main.py::handler[Handle request]
+
+Example: If api.ts IS in your batch but main.py is NOT:
+- ✓ CREATE node: frontend/src/api.ts::analyzeWorkflow[Call analysis API]
+- ✓ CREATE edge: frontend/src/api.ts::analyzeWorkflow --> backend/main.py::analyze_workflow
+- ✗ DO NOT create: backend/main.py::analyze_workflow[Handle request] (main.py not in batch!)
+
+CORRECT (HTTP client in batch):
 ```
-from services.elevenlabs_api import create_style_reference
-from services.runway_api import generate_video_from_image
-from services.sync_labs_api import lipsync_video
-
-async def run_pipeline():
-    voice = create_style_reference(...)      # ElevenLabs
-    beat = generate_beat_pattern(...)        # Grok
-    video = generate_video_from_image(...)   # Runway
-    final = lipsync_video(...)               # Sync Labs
+    api.ts::analyzeWorkflow[Call analysis API] --> backend/main.py::analyze_workflow
 ```
 
-CORRECT: One workflow "Video Generation Pipeline" with 5 connected nodes
-WRONG: Four separate single-node workflows
+WRONG (inventing nodes for files not in batch):
+```
+    api_call_1[Call API] --> main_handler_1[Handle]  ← WRONG: invented IDs
+```
 
-ANTI-PATTERN (DON'T DO):
-- Workflow 1: "ElevenLabs" (1 node)
-- Workflow 2: "Grok Beat" (1 node)
-- Workflow 3: "Runway" (1 node)
-- Workflow 4: "Sync Labs" (1 node)
+Node IDs MUST follow {path}::{function} format from Section 2.2.
 
-CORRECT PATTERN (DO THIS):
-- Workflow: "Video Generation Pipeline" (5+ nodes)
-  Entry → ElevenLabs Voice → Grok Beat → Runway Video → Sync Labs Lip Sync → Output
+SKIP these HTTP endpoints (clearly not LLM-related):
+- /auth/*, /login, /register, /logout (authentication)
+- /health, /status, /ping (health checks)
+- /static/*, /assets/* (static files)
 
-LABEL AND DESCRIPTION REQUIREMENTS (CRITICAL):
-- "label": Must be 2-4 words maximum (e.g., "GPT-4 Call", "Format Request", "API Endpoint")
-- "description": REQUIRED - 1-2 brief sentences explaining what the node does
-- EVERY node MUST have a description - NO EXCEPTIONS
-- Keep labels SHORT (2-4 words) - they will be displayed in the graph visualization
-- NEVER prefix labels with node type names (e.g., NO "Decision: Check X", "LLM: Call Y", "Tool: Do Z")
-- NEVER use function names, class names, or method names as labels:
-  - WRONG: "ContentGenerationService.generate_quiz_content", "LLMService Chat Trigger", "process_data_batch"
-  - CORRECT: "Generate Quiz", "Chat Trigger", "Process Batch"
-  - Labels describe WHAT the node does in plain English, NOT the code identifier
-- For decision nodes: Labels MUST be phrased as questions (e.g., "Does X Exist?", "Which Route?", "Is Valid?")
-- Keep descriptions CONCISE but informative (1-2 sentences) - they appear in popups when nodes are clicked
-- Description examples: "Receives analysis requests via POST /analyze endpoint", "Calls Gemini 2.5 Flash to analyze code"
-- IMPORTANT: Be brief but clear - avoid verbose or overly detailed descriptions
+INCLUDE these even if LLM call is in another batch:
+- /analyze, /generate, /complete, /chat (likely LLM endpoints)
+- Any endpoint that receives code, prompts, or returns AI responses
 
-Entry/Exit detection (MUST DO FIRST - CHECK ALL EDGES):
-  * Entry nodes have ZERO incoming edges from ANY node in the ENTIRE graph
-  * Exit nodes have ZERO outgoing edges to ANY node in the ENTIRE graph
-  * Mark with "isEntryPoint": true or "isExitPoint": true
-
-WORKFLOW IDENTIFICATION (CRITICAL):
-Identify and name logical workflow groupings based on semantic purpose. Each workflow represents a cohesive unit of functionality.
-
-WORKFLOW NAMING AND ID RULES:
-1. Analyze the PURPOSE of each connected component (what business goal does it serve?)
-2. Create descriptive names that reflect the workflow's function (2-6 words)
-3. Every workflow MUST have a unique, meaningful name (NO generic names)
-4. Include what the workflow DOES, not just what it contains
-5. CRITICAL - UNIQUE NAMES: Include the FILE NAME or a DISTINGUISHING DETAIL in the workflow name
-   - If multiple files do similar things, differentiate by: file name, input type, output type, or specific method
-   - WRONG: Two workflows both named "Data Extraction Pipeline"
-   - CORRECT: "CSV Data Extraction" vs "PDF Data Extraction" or "Batch Data Extraction" vs "Single File Extraction"
-6. NEVER use the same workflow name across different files - each file should have a distinct workflow name
-7. WORKFLOW IDs MUST BE GLOBALLY UNIQUE:
-   - WRONG: Using generic IDs like "workflow_1", "workflow_2" (these collide across files!)
-   - CORRECT: Include filename or unique identifier: "workflow_llm_service_chat", "workflow_embedding_rag_query"
-   - Format: "workflow_[filename]_[purpose]" or similar unique pattern
-   - IDs are used for color assignment - same ID = same color, which causes visual confusion
-
-WORKFLOW EXAMPLES:
-- "User Authentication Flow" (login, validation, token generation)
-- "Document Analysis Pipeline" (upload, parsing, LLM analysis, storage)
-- "Multi-Agent Research Workflow" (query, agent orchestration, synthesis)
-- "RAG Query Processing" (retrieval, context building, LLM generation)
-- "API Request Handler" (validation, processing, response formatting)
-- "Data Extraction Pipeline" (fetch, transform, validate, store)
-- UNIQUENESS EXAMPLES (for similar functionality in different files):
-  - "Batch PDF Vision Extraction" vs "Single PDF Vision Extraction"
-  - "Full Pipeline Orchestration" vs "Analysis Step Only"
-  - "Production Data Processing" vs "Test Data Processing"
-
-WORKFLOW DETECTION:
-1. Start from entry points (trigger nodes)
-2. Follow execution flow through connected nodes
-3. Identify logical boundaries (where one workflow ends, another begins)
-4. Group nodes that serve the same high-level purpose
-5. CRITICAL: Each workflow MUST contain at least 1 LLM call node (type: "llm")
-
-════════════════════════════════════════════════════════════════════════════════
-🚨 ABSOLUTE REQUIREMENTS - VIOLATIONS WILL CAUSE SYSTEM FAILURE 🚨
-════════════════════════════════════════════════════════════════════════════════
-
-RULE #1: EVERY NODE MUST HAVE EDGES
-- If a node has ZERO edges (no source, no target in any edge), DO NOT CREATE IT
-- Nodes without edges are INVALID and will cause rendering errors
-- Check EVERY node before adding it to the response
-
-RULE #2: EVERY WORKFLOW MUST BE FULLY CONNECTED
-- ALL nodes in a workflow MUST be reachable from each other via edges
-- If you have nodes A, B, C in workflow "X", there MUST be edge paths connecting them
-- WRONG: workflow "X" has nodes [A, B, C] but only edge A→B (C is disconnected)
-- CORRECT: workflow "X" has nodes [A, B, C] with edges A→B, B→C (all connected)
-
-RULE #3: DISCONNECTED NODES = SEPARATE WORKFLOWS
-- If nodes are NOT connected by edges, they CANNOT be in the same workflow
-- You MUST create separate workflows for disconnected components
-- WRONG: workflow "Chat Processing" with 3 disconnected node groups
-- CORRECT: workflow "Chat Message Handler", workflow "Chat History Manager", workflow "Chat Response Generator"
-
-RULE #4: MINIMUM 3 NODES PER WORKFLOW
-- Every workflow MUST have at least 3 nodes: entry point → LLM call → exit point
-- 1-node workflows are INVALID
-- 2-node workflows are INVALID
-- If you cannot create 3+ connected nodes, DELETE the workflow
-
-════════════════════════════════════════════════════════════════════════════════
-🔍 STEP-BY-STEP VALIDATION PROCESS (PERFORM FOR EVERY WORKFLOW)
-════════════════════════════════════════════════════════════════════════════════
-
-STEP 1: CREATE NODES AND EDGES
-- Identify all LLM-related functions in the code
-- Create nodes for each function
-- Create edges showing the actual call flow between functions
-
-STEP 2: PERFORM BFS CONNECTIVITY CHECK FOR EACH WORKFLOW
-For each workflow you create:
-a) Pick any node in the workflow as starting point
-b) Follow ALL edges (both incoming and outgoing) to find connected nodes
-c) Mark all reachable nodes
-d) If ANY node in workflow.nodeIds is NOT reachable, you have disconnected components
-
-STEP 3: SPLIT DISCONNECTED COMPONENTS INTO SEPARATE WORKFLOWS
-If BFS finds disconnected groups:
-- Group 1: nodes [A, B, C] (all reachable from A)
-- Group 2: nodes [D, E] (all reachable from D, but NO path to A/B/C)
-- Group 3: node [F] (no edges at all)
-
-Create workflows:
-- workflow_1 with nodeIds: [A, B, C] (if 3+ nodes)
-- workflow_2 with nodeIds: [D, E] (DELETE - only 2 nodes)
-- workflow_3 with nodeIds: [F] (DELETE - only 1 node)
-
-STEP 4: VALIDATE EACH WORKFLOW HAS 3+ CONNECTED NODES
-After splitting:
-- Count nodes in each workflow
-- If < 3 nodes: DELETE the workflow
-- If >= 3 nodes: Keep it
-
-STEP 5: VERIFY NO ORPHANED NODES IN FINAL OUTPUT
-Before returning JSON:
-- For EVERY node in nodes array, count how many edges reference it
-- If count = 0, REMOVE the node from nodes array
-- If node appears in any workflow.nodeIds, REMOVE it from that array too
-
-════════════════════════════════════════════════════════════════════════════════
-❌ EXAMPLES OF INVALID WORKFLOWS (DO NOT CREATE THESE)
-════════════════════════════════════════════════════════════════════════════════
-
-INVALID EXAMPLE 1: Disconnected nodes in same workflow
-{
-  "workflows": [{
-    "id": "workflow_1",
-    "name": "User Management",
-    "nodeIds": ["login_handler", "register_handler", "reset_handler"]
-  }],
-  "edges": [
-    {"source": "login_entry", "target": "login_handler"}
-  ]
-}
-PROBLEM: register_handler and reset_handler have NO edges connecting them!
-❌ PROBLEM: register_handler and reset_handler are orphaned
-
-INVALID EXAMPLE 2: Single node workflow
-{
-  "workflows": [{
-    "id": "workflow_1",
-    "name": "Chat Helper",
-    "nodeIds": ["format_response"]
-  }],
-  "nodes": [{"id": "format_response", ...}],
-  "edges": []
-}
-❌ PROBLEM: Only 1 node, no edges
-
-INVALID EXAMPLE 3: Node with no edges
-{
-  "nodes": [
-    {"id": "helper_func", ...},
-    {"id": "main_handler", ...}
-  ],
-  "edges": [
-    {"source": "main_handler", "target": "llm_call"}
-  ]
-}
-❌ PROBLEM: helper_func exists but has no edges (not referenced anywhere)
-
-════════════════════════════════════════════════════════════════════════════════
-✅ EXAMPLES OF VALID WORKFLOWS (CREATE THESE)
-════════════════════════════════════════════════════════════════════════════════
-
-VALID EXAMPLE 1: Three connected nodes
-{
-  "workflows": [{
-    "id": "workflow_auth_login",
-    "name": "User Login Flow",
-    "nodeIds": ["login_entry", "auth_llm", "login_exit"]
-  }],
-  "edges": [
-    {"source": "login_entry", "target": "auth_llm"},
-    {"source": "auth_llm", "target": "login_exit"}
-  ]
-}
-✅ CORRECT: 3 nodes, all connected via edges, UNIQUE workflow ID
-
-VALID EXAMPLE 2: Split disconnected components
-{
-  "workflows": [
-    {
-      "id": "workflow_auth_login",
-      "name": "User Login Flow",
-      "nodeIds": ["login_entry", "auth_llm", "login_exit"]
-    },
-    {
-      "id": "workflow_auth_register",
-      "name": "User Registration Flow",
-      "nodeIds": ["register_entry", "validation_llm", "create_user", "register_exit"]
-    }
-  ],
-  "edges": [
-    {"source": "login_entry", "target": "auth_llm"},
-    {"source": "auth_llm", "target": "login_exit"},
-    {"source": "register_entry", "target": "validation_llm"},
-    {"source": "validation_llm", "target": "create_user"},
-    {"source": "create_user", "target": "register_exit"}
-  ]
-}
-✅ CORRECT: Two separate workflows, each fully connected, UNIQUE workflow IDs
-
-════════════════════════════════════════════════════════════════════════════════
-
-WORKFLOW DESCRIPTION:
-- 1-2 brief sentences explaining what the workflow accomplishes
-- Include key operations and final outcome
-- Keep concise but informative
-- Example: "Processes user queries by retrieving relevant documents from vector store, building context, and generating responses using GPT-4."
-
-SUB-COMPONENT IDENTIFICATION (FOR WORKFLOWS WITH CLEAR GROUPINGS):
-When a workflow has 5+ nodes, identify logical sub-components that group related nodes together.
-
-COMPONENT TYPES TO DETECT:
-- Error handling branches (try/catch, retry logic, fallback paths)
-- Tool selection/execution (choosing and running tools available to LLM)
-- Data transformation pipelines (parsing, formatting, validation chains)
-- Memory/state operations (storing, retrieving, updating state)
-- Decision branches (complex conditional logic with multiple paths)
-- External integrations (grouped API calls to same service)
-
-COMPONENT RULES:
-1. Each component MUST have 3+ nodes (minimum to be useful when collapsed)
-2. Components MUST be fully connected internally (all nodes reachable via edges)
-3. A node can only belong to ONE component (no overlapping)
-4. Not all nodes need to be in components - standalone nodes are fine
-5. Component names should be 2-4 words describing the logical unit
-
-COMPONENT EXAMPLE:
-Workflow with 12 nodes might have:
-- "Error Handling" component (nodes: error_check, retry_logic, fallback_response)
-- "Tool Execution" component (nodes: tool_select, tool_call, result_parse)
-- 6 standalone nodes not in any component
-
-COMPONENT OUTPUT FORMAT:
-"components": [
-  {"id": "comp_error", "name": "Error Handling", "description": "Handles errors with retry logic and fallback responses", "nodeIds": ["error_check", "retry_logic", "fallback_response"]},
-  {"id": "comp_tools", "name": "Tool Execution", "description": "Selects and executes tools based on LLM decision", "nodeIds": ["tool_select", "tool_call", "result_parse"]}
-]
-
-WHEN TO CREATE COMPONENTS:
-- Workflow has 5+ nodes
-- There's a clear logical grouping of 3+ related nodes
-- The component has a distinct semantic purpose
-- Collapsing it would simplify the visual representation
-
-WHEN NOT TO CREATE COMPONENTS:
-- Linear workflows (A → B → C → D) - no logical grouping
-- All nodes are equally important to see
-- Groupings would be artificial/unclear
-
-CRITICAL JSON STRUCTURE RULES:
-1. "source" field MUST be an object with {"file": "...", "line": 123, "function": "..."}
-2. "sourceLocation" field MUST be an object with {"file": "...", "line": 123, "function": "..."}
-3. NEVER use metadata references like "[1]", "[2]", etc. - ALWAYS use FULL objects
-4. WRONG: "source": "[3]"
-5. CORRECT: "source": {"file": "/path/to/file.py", "line": 42, "function": "function_name"}
-6. Copy the EXACT file/line/function values from metadata above (not the bracket numbers)
-
-IMPORTANT - Edge sourceLocation in this example:
-- Edge 1 (request): Line 58 is where 'request' is created in analyze_endpoint, not the function definition
-- Edge 2 (prompt): Line 76 is where 'prompt' is built in analyze_workflow, not the function definition
-- Edge 3 (result): Line 83 is where 'result' is USED in analyze_workflow, not where it's returned from Gemini
-- Edge 4 (graph_data): Line 87 is where 'graph_data' is USED for return, not where it's parsed
-
-EXAMPLE OUTPUT FORMAT:
-{
-  "nodes": [
-    {"id": "node1", "label": "API Endpoint", "description": "Receives analysis requests via POST /analyze endpoint with code and metadata", "type": "trigger", "source": {"file": "/backend/main.py", "line": 55, "function": "analyze_endpoint"}, "isEntryPoint": true},
-    {"id": "node2", "label": "Format Request", "description": "Formats and validates incoming request data before processing", "type": "parser", "source": {"file": "/backend/main.py", "line": 71, "function": "analyze_workflow"}},
-    {"id": "node3", "label": "Gemini Call", "description": "Calls Gemini 2.5 Flash with temperature 0.0 to analyze code and extract workflow structure", "type": "llm", "model": "gemini-2.5-flash", "source": {"file": "/backend/gemini_client.py", "line": 137, "function": "analyze_workflow"}},
-    {"id": "node4", "label": "Parse Response", "description": "Parses and validates LLM JSON response to extract nodes and edges", "type": "parser", "source": {"file": "/backend/main.py", "line": 82, "function": "analyze_workflow"}},
-    {"id": "node5", "label": "Return Response", "description": "Returns formatted workflow graph as JSON response to client", "type": "output", "source": {"file": "/backend/main.py", "line": 86, "function": "analyze_workflow"}, "isExitPoint": true}
-  ],
-  "edges": [
-    {"source": "node1", "target": "node2", "label": "request", "dataType": "AnalyzeRequest", "description": "Incoming analysis request with code and metadata", "sourceLocation": {"file": "/backend/main.py", "line": 58, "function": "analyze_endpoint"}},
-    {"source": "node2", "target": "node3", "label": "prompt", "dataType": "str", "description": "Formatted prompt string for LLM analysis", "sourceLocation": {"file": "/backend/main.py", "line": 76, "function": "analyze_workflow"}},
-    {"source": "node3", "target": "node4", "label": "result", "dataType": "str", "description": "Raw JSON response text from Gemini", "sourceLocation": {"file": "/backend/main.py", "line": 83, "function": "analyze_workflow"}},
-    {"source": "node4", "target": "node5", "label": "graph_data", "dataType": "WorkflowGraph", "description": "Parsed and validated workflow graph object", "sourceLocation": {"file": "/backend/main.py", "line": 87, "function": "analyze_workflow"}}
-  ],
-  "workflows": [
-    {"id": "workflow_main_code_analysis", "name": "Code Analysis Pipeline", "description": "Receives code via API endpoint, analyzes it using Gemini LLM to extract workflow structure, and returns the parsed graph to the client.", "nodeIds": ["node1", "node2", "node3", "node4", "node5"], "components": []}
-  ],
-  "llms_detected": ["OpenAI"],
-  "ai_services_detected": ["ElevenLabs", "Runway", "Sync Labs"]
-}
-
-VALIDATION BEFORE RETURNING:
-- Check EVERY "source" field is an object (not a string like "[3]")
-- Check EVERY "sourceLocation" field is an object (not a string)
-- Check all required fields: file, line, function
-- Check EVERY edge "label" is an actual variable name from the code, NOT a descriptive phrase
-- Check "llms_detected" and "ai_services_detected" ONLY contain services actually found in the code
-- Check "workflows" array exists and has at least 1 workflow
-- Check every workflow has: id (UNIQUE, not generic like "workflow_1"!), name (descriptive!), description, nodeIds, components (can be empty array)
-- Check all nodes are included in at least one workflow (no orphans)
-- If workflow has 5+ nodes, check for logical sub-components to add
-- Check each component has 3+ nodes and all nodes are connected internally
-
-NO markdown, NO explanation, ONLY JSON."""
+## 10. FINAL CHECK
+1. No transitive edges: if A→B and B→C exist, A→C should NOT exist
+2. Decision nodes rare (0-2 per workflow)
+3. Output NO_LLM_WORKFLOW ONLY if the code CLEARLY has no LLM relevance:
+   - ONLY auth/login/register code with no AI functionality
+   - ONLY health checks, static file serving
+   - ONLY database CRUD with no AI processing
+4. When in doubt, CREATE the workflow - filtering happens later during merge"""
 
 
-def build_user_prompt(code: str, metadata: list = None) -> str:
-    """Build the dynamic user prompt with metadata and code."""
+# Select instruction based on format flag
+SYSTEM_INSTRUCTION = MERMAID_SYSTEM_INSTRUCTION
+
+
+def build_user_prompt(code: str, metadata: list = None, http_connections: str = None) -> str:
+    """Build the dynamic user prompt with metadata and code.
+
+    Args:
+        code: The code to analyze
+        metadata: Source location metadata for nodes
+        http_connections: Formatted HTTP connection context for service-to-service edges
+    """
     metadata_str = ""
     location_index = 0
 
@@ -651,7 +286,153 @@ def build_user_prompt(code: str, metadata: list = None) -> str:
         metadata_str += "5. VALIDATION: Before finishing, verify NO two nodes share the same location\n"
         metadata_str += "========================================\n\n"
 
-    return f"""{metadata_str}Code to analyze:
+    # Add HTTP connections context if provided
+    http_context = ""
+    if http_connections:
+        http_context = f"""
+<http_connections>
+{http_connections}
+</http_connections>
+
+"""
+
+    if USE_MERMAID_FORMAT:
+        return f"""{metadata_str}{http_context}Code to analyze:
+{code}
+
+Output mermaid diagram(s) and metadata section. Each node must have unique source location."""
+    else:
+        return f"""{metadata_str}{http_context}Code to analyze:
 {code}
 
 Return ONLY valid JSON (NOTE: source locations MUST be different for each node)."""
+
+
+# Metadata-only prompt for incremental updates
+# Much smaller and faster than full analysis
+METADATA_ONLY_PROMPT = """Generate human-readable labels and descriptions for code functions.
+
+For each function, create:
+1. label: A clear, concise name (2-5 words) describing what the function does
+2. description: One sentence explaining the function's purpose
+
+RULES:
+- Use Title Case for labels (e.g., "Build User Prompt", "Parse API Response")
+- Labels should be ACTION-oriented (start with verbs: Build, Parse, Validate, etc.)
+- Descriptions should complete the sentence "This function..."
+- For LLM calls, mention the model if known
+- For triggers, describe what initiates them (API endpoint, scheduled task, etc.)
+
+OUTPUT FORMAT (JSON only):
+{
+  "files": [
+    {
+      "filePath": "path/to/file.py",
+      "functions": [
+        {
+          "name": "function_name",
+          "label": "Human Readable Label",
+          "description": "Brief description of what this function does."
+        }
+      ],
+      "edgeLabels": {
+        "caller→callee": "label for data passed"
+      }
+    }
+  ]
+}
+
+STRUCTURE TO ANALYZE:
+"""
+
+
+# Condensation prompt for cross-batch structure analysis
+CONDENSATION_SYSTEM_PROMPT = """You are a codebase analyzer specializing in LLM/AI workflow identification.
+
+## TASK
+Analyze raw codebase structure (from tree-sitter) and identify LLM/AI workflows.
+Output a CONDENSED structure containing ONLY workflow-relevant files and functions.
+
+## WHAT TO INCLUDE
+1. Files containing direct LLM API calls (OpenAI, Anthropic, Gemini, etc.)
+2. Files that call the LLM-containing files
+3. Entry points (API endpoints, CLI handlers) that trigger LLM workflows
+4. Response handlers that process LLM outputs
+
+## WHAT TO EXCLUDE
+- Test files
+- Configuration files
+- Type definitions / interfaces only
+- Utility functions not in workflow path
+- Documentation
+- Build/deployment scripts
+
+## OUTPUT FORMAT
+```xml
+<workflow_structure>
+  <workflow name="[Descriptive Name]" entry="[entry_file.py:entry_function]">
+    <file path="[relative/path/file.py]">
+      function_name(params) → [brief description or calls]
+      another_function() → LLM call
+    </file>
+    <file path="[another/file.ts]">
+      handler() → calls file.py:function_name
+    </file>
+  </workflow>
+</workflow_structure>
+```
+
+## RULES
+1. Group connected files into workflows
+2. Name workflows by PURPOSE (e.g., "Code Analysis", "Chat Handler")
+3. Show call relationships between files
+4. Mark LLM-calling functions explicitly
+5. Include file paths EXACTLY as provided in input
+6. Be concise - one line per function"""
+
+
+def build_metadata_only_prompt(files: list) -> str:
+    """Build prompt for metadata-only analysis.
+
+    Args:
+        files: List of FileStructureContext dicts with:
+            - filePath: str
+            - functions: List[{name, line, type, calls, code?}]
+            - imports: List[str]
+
+    Returns:
+        Complete prompt string
+    """
+    structure_parts = []
+
+    for file_ctx in files:
+        file_path = file_ctx.get('filePath', file_ctx.get('file_path', 'unknown'))
+        functions = file_ctx.get('functions', [])
+        imports = file_ctx.get('imports', [])
+
+        part = f"\n## {file_path}\n"
+
+        if imports:
+            part += f"Imports: {', '.join(imports[:10])}\n"
+
+        part += "\nFunctions:\n"
+        for func in functions:
+            name = func.get('name', 'unknown')
+            line = func.get('line', 0)
+            ftype = func.get('type', 'function')
+            calls = func.get('calls', [])
+
+            part += f"  - {name}() @ line {line} [{ftype}]\n"
+            if calls:
+                part += f"    calls: {', '.join(calls[:5])}\n"
+
+            # Include code snippet if available
+            code = func.get('code')
+            if code:
+                # Truncate long code
+                code_preview = code[:500] + '...' if len(code) > 500 else code
+                part += f"    code: {code_preview}\n"
+
+        structure_parts.append(part)
+
+    return METADATA_ONLY_PROMPT + '\n'.join(structure_parts) + "\n\nReturn ONLY valid JSON."

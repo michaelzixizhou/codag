@@ -106,7 +106,7 @@ export function registerWorkflowParticipant(
       const viewState = getViewState();
       if (viewState?.selectedNodeId) {
         console.log('📍 [@codag] Selected node detected:', viewState.selectedNodeId);
-        graph = await cacheManager.getMostRecentWorkflows();
+        graph = await cacheManager.getMergedGraph();
         if (graph) {
           const selectedNode = graph.nodes.find((n: any) => n.id === viewState.selectedNodeId);
           if (selectedNode?.source) {
@@ -130,14 +130,18 @@ export function registerWorkflowParticipant(
           filePath = editor.document.uri.fsPath;
           fileContent = editor.document.getText();
           console.log('📁 [@codag] Using active editor file:', filePath);
-          graph = await cacheManager.getPerFile(filePath, fileContent);
+          // Check if file is cached and get its graph
+          const hash = cacheManager.hashContentAST(fileContent, filePath);
+          if (cacheManager.isFileValid(filePath, hash)) {
+            graph = await cacheManager.getMergedGraph([filePath]);
+          }
         }
       }
 
       // Strategy 3: Fall back to all cached workflows
       if (!graph) {
         console.log('📊 [@codag] No file context, using workspace-level cache');
-        graph = await cacheManager.getMostRecentWorkflows();
+        graph = await cacheManager.getMergedGraph();
       }
 
       // Only error if no cache exists at all

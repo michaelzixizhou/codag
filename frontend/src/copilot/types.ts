@@ -28,7 +28,7 @@ export interface AdjacentNodeInfo {
   source: {
     file: string;
     line: number;
-    function: string;
+    function?: string;
   };
 }
 
@@ -36,8 +36,6 @@ export interface AdjacentNodeInfo {
 export interface WorkflowInfo {
   name: string;
   nodeIds: string[];     // All node IDs in this workflow
-  entryPoints: string[]; // Node IDs
-  exitPoints: string[];  // Node IDs
 }
 
 // Cross-file dependency info

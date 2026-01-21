@@ -27,7 +27,7 @@ class ListWorkflowsTool implements vscode.LanguageModelTool<ListWorkflowsInput> 
             console.log('[list-workflows] Listing all workflows');
 
             // Get the complete workflow graph
-            const graph = await this.cacheManager.getMostRecentWorkflows();
+            const graph = await this.cacheManager.getMergedGraph();
             if (!graph) {
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart('No workflow data found. Please run "Codag: Open" and use the analysis panel first.')
@@ -53,10 +53,6 @@ class ListWorkflowsTool implements vscode.LanguageModelTool<ListWorkflowsInput> 
                     wf.nodeIds.includes(e.source) && wf.nodeIds.includes(e.target)
                 );
 
-                // Get entry and exit nodes
-                const entryNodes = nodes.filter(n => n.isEntryPoint);
-                const exitNodes = nodes.filter(n => n.isExitPoint);
-
                 // Count node types
                 const nodeTypeCounts = this.countNodeTypes(nodes);
 
@@ -74,16 +70,6 @@ class ListWorkflowsTool implements vscode.LanguageModelTool<ListWorkflowsInput> 
                     parts.push(`  Types: ${nodeTypeCounts}`);
                 }
 
-                if (entryNodes.length > 0) {
-                    const entryLabels = entryNodes.map(n => `${TYPE_SYMBOLS[n.type] || '□'} ${n.label}`);
-                    parts.push(`  Entry: ${entryLabels.join(', ')}`);
-                }
-
-                if (exitNodes.length > 0) {
-                    const exitLabels = exitNodes.map(n => `${TYPE_SYMBOLS[n.type] || '□'} ${n.label}`);
-                    parts.push(`  Exit: ${exitLabels.join(', ')}`);
-                }
-
                 if (llmNodes.length > 0) {
                     const llmLabels = llmNodes.map(n => n.label);
                     parts.push(`  LLM Calls: ${llmLabels.join(', ')}`);
@@ -93,14 +79,6 @@ class ListWorkflowsTool implements vscode.LanguageModelTool<ListWorkflowsInput> 
                     // Show just filenames for brevity
                     const fileNames = files.map(f => f.split('/').pop() || f);
                     parts.push(`  Files: ${fileNames.join(', ')}`);
-                }
-
-                // Check for potential issues
-                if (entryNodes.length === 0) {
-                    parts.push(`  ⚠️ No entry point detected`);
-                }
-                if (exitNodes.length === 0) {
-                    parts.push(`  ⚠️ No exit point detected`);
                 }
 
                 parts.push('');

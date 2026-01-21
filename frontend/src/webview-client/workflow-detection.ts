@@ -1,34 +1,98 @@
 // Workflow detection and grouping logic
-import { WorkflowGraph, WorkflowGroup, WorkflowComponent } from './types';
+import { WorkflowGraph, WorkflowGroup, WorkflowComponent, WorkflowNode, WorkflowEdge } from './types';
 import { colorFromString } from './utils';
 
 /**
- * Ensure visual cues (entry/exit points) are set
+ * Find connected components within a set of node IDs
+ * Returns array of arrays, each inner array is a connected component
  */
-export function ensureVisualCues(data: WorkflowGraph): void {
-    // Build adjacency lists
-    const incomingEdges = new Map<string, any[]>();
-    const outgoingEdges = new Map<string, any[]>();
+function findConnectedComponents(
+    nodeIds: string[],
+    incomingEdges: Map<string, WorkflowEdge[]>,
+    outgoingEdges: Map<string, WorkflowEdge[]>
+): string[][] {
+    const nodeSet = new Set(nodeIds);
+    const visited = new Set<string>();
+    const components: string[][] = [];
 
-    data.nodes.forEach(n => {
-        incomingEdges.set(n.id, []);
-        outgoingEdges.set(n.id, []);
-    });
+    for (const startId of nodeIds) {
+        if (visited.has(startId)) continue;
 
-    data.edges.forEach(e => {
-        incomingEdges.get(e.target)?.push(e);
-        outgoingEdges.get(e.source)?.push(e);
-    });
+        // BFS to find all nodes in this component
+        const component: string[] = [];
+        const queue = [startId];
+        visited.add(startId);
 
-    // Detect entry/exit points
-    data.nodes.forEach(node => {
-        if (!node.isEntryPoint && (incomingEdges.get(node.id)?.length ?? 0) === 0) {
-            node.isEntryPoint = true;
+        while (queue.length > 0) {
+            const currentId = queue.shift()!;
+            component.push(currentId);
+
+            // Check outgoing edges (within the workflow)
+            const outgoing = outgoingEdges.get(currentId) || [];
+            for (const edge of outgoing) {
+                if (nodeSet.has(edge.target) && !visited.has(edge.target)) {
+                    visited.add(edge.target);
+                    queue.push(edge.target);
+                }
+            }
+
+            // Check incoming edges (within the workflow)
+            const incoming = incomingEdges.get(currentId) || [];
+            for (const edge of incoming) {
+                if (nodeSet.has(edge.source) && !visited.has(edge.source)) {
+                    visited.add(edge.source);
+                    queue.push(edge.source);
+                }
+            }
         }
-        if (!node.isExitPoint && (outgoingEdges.get(node.id)?.length ?? 0) === 0) {
-            node.isExitPoint = true;
+
+        components.push(component);
+    }
+
+    return components;
+}
+
+/**
+ * Find entry nodes for a component (nodes with no incoming edges from within the component)
+ */
+function findEntryNodes(
+    componentNodeIds: string[],
+    incomingEdges: Map<string, WorkflowEdge[]>
+): string[] {
+    const componentSet = new Set(componentNodeIds);
+    const entryNodes: string[] = [];
+
+    for (const nodeId of componentNodeIds) {
+        const incoming = incomingEdges.get(nodeId) || [];
+        const hasInternalIncoming = incoming.some(e => componentSet.has(e.source));
+        if (!hasInternalIncoming) {
+            entryNodes.push(nodeId);
         }
-    });
+    }
+
+    return entryNodes;
+}
+
+/**
+ * Create a synthetic title node for a workflow
+ */
+function createTitleNode(workflowId: string, workflowName: string): WorkflowNode {
+    return {
+        id: `__title_${workflowId}`,
+        label: workflowName,
+        type: 'workflow-title'
+    };
+}
+
+/**
+ * Create edges from title node to entry nodes
+ */
+function createTitleEdges(titleNodeId: string, entryNodeIds: string[]): WorkflowEdge[] {
+    return entryNodeIds.map(targetId => ({
+        source: titleNodeId,
+        target: targetId,
+        label: ''
+    }));
 }
 
 /**
@@ -44,29 +108,27 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
     if (data.workflows && data.workflows.length > 0) {
         const groups: WorkflowGroup[] = [];
 
-        // Build adjacency lists for connectivity validation
-        const incomingEdges = new Map<string, any[]>();
-        const outgoingEdges = new Map<string, any[]>();
+        // Build adjacency lists for finding connected components and entry nodes
+        const incomingEdges = new Map<string, WorkflowEdge[]>();
+        const outgoingEdges = new Map<string, WorkflowEdge[]>();
+
         data.nodes.forEach(n => {
             incomingEdges.set(n.id, []);
             outgoingEdges.set(n.id, []);
         });
+
         data.edges.forEach(e => {
-            incomingEdges.get(e.target)?.push(e);
-            outgoingEdges.get(e.source)?.push(e);
+            if (incomingEdges.has(e.target)) {
+                incomingEdges.get(e.target)!.push(e);
+            }
+            if (outgoingEdges.has(e.source)) {
+                outgoingEdges.get(e.source)!.push(e);
+            }
         });
 
         // Group workflows by ID first to handle duplicates from multi-file analysis
         const workflowsByBase = new Map<string, { id: string; name: string; description?: string; nodeIds: string[] }>();
         data.workflows.forEach((workflow, idx) => {
-            const workflowNodes = data.nodes.filter(n => workflow.nodeIds.includes(n.id));
-            const llmNodesInWorkflow = workflowNodes.filter(n => n.type === 'llm');
-
-            // ONLY include workflows that have LLM nodes
-            if (llmNodesInWorkflow.length === 0) {
-                return;
-            }
-
             const baseId = workflow.id || `group_${idx}`;
 
             if (!workflowsByBase.has(baseId)) {
@@ -87,119 +149,175 @@ export function detectWorkflowGroups(data: WorkflowGraph): WorkflowGroup[] {
             });
         });
 
-        // Process each merged workflow and split into connected components
-        workflowsByBase.forEach((workflow, baseId) => {
-            const visited = new Set<string>();
-            const connectedComponents: string[][] = [];
-            const workflowNodeSet = new Set(workflow.nodeIds);
+        // Merge workflows that are connected by edges (including HTTP edges)
+        // This ensures service-to-service connections keep workflows unified
+        const nodeToWorkflow = new Map<string, string>();
+        workflowsByBase.forEach((wf, wfId) => {
+            wf.nodeIds.forEach(nodeId => nodeToWorkflow.set(nodeId, wfId));
+        });
 
-            workflow.nodeIds.forEach(startNodeId => {
-                if (visited.has(startNodeId)) return;
+        // Union-find for merging workflows
+        const workflowParent = new Map<string, string>();
+        workflowsByBase.forEach((_, wfId) => workflowParent.set(wfId, wfId));
 
-                // BFS to find all connected nodes within this workflow
-                const component = new Set<string>();
-                const queue = [startNodeId];
-                const queueVisited = new Set([startNodeId]);
+        function findRoot(id: string): string {
+            if (workflowParent.get(id) !== id) {
+                workflowParent.set(id, findRoot(workflowParent.get(id)!));
+            }
+            return workflowParent.get(id)!;
+        }
 
-                while (queue.length > 0) {
-                    const currentId = queue.shift()!;
-                    component.add(currentId);
-                    visited.add(currentId);
+        function unionWorkflows(wf1: string, wf2: string): void {
+            const root1 = findRoot(wf1);
+            const root2 = findRoot(wf2);
+            if (root1 !== root2) {
+                workflowParent.set(root2, root1);
+            }
+        }
 
-                    // Traverse edges only to nodes within this workflow
-                    const incoming = incomingEdges.get(currentId) || [];
-                    for (const edge of incoming) {
-                        if (!queueVisited.has(edge.source) && workflowNodeSet.has(edge.source)) {
-                            queue.push(edge.source);
-                            queueVisited.add(edge.source);
-                        }
-                    }
+        // Check each edge - if it connects nodes in different workflows, merge them
+        data.edges.forEach(edge => {
+            const sourceWf = nodeToWorkflow.get(edge.source);
+            const targetWf = nodeToWorkflow.get(edge.target);
 
-                    const outgoing = outgoingEdges.get(currentId) || [];
-                    for (const edge of outgoing) {
-                        if (!queueVisited.has(edge.target) && workflowNodeSet.has(edge.target)) {
-                            queue.push(edge.target);
-                            queueVisited.add(edge.target);
-                        }
-                    }
-                }
-
-                connectedComponents.push(Array.from(component));
-            });
-
-            // Create a separate group for each connected component
-            if (connectedComponents.length > 1) {
-                console.warn(
-                    `Workflow "${workflow.name}" contains ${connectedComponents.length} disconnected components.`
-                );
+            if (sourceWf && targetWf && sourceWf !== targetWf) {
+                unionWorkflows(sourceWf, targetWf);
             }
 
-            connectedComponents.forEach((componentNodes, compIdx) => {
-                const groupId = connectedComponents.length > 1
-                    ? `${baseId}_${compIdx}`
-                    : baseId;
-
-                // Get actual node data for this component
-                const componentNodesData = componentNodes.map(id =>
-                    data.nodes.find(n => n.id === id)
-                ).filter(n => n);
-
-                // Find LLM nodes within this component to determine model names
-                const llmNodes = componentNodesData.filter(n => n?.type === 'llm');
-                const modelNames = llmNodes
-                    .map(n => n?.model)
-                    .filter((m): m is string => !!m);
-                const llmProviders = modelNames.length > 0
-                    ? [...new Set(modelNames)].join(', ')
-                    : 'LLM';
-
-                let groupName = workflow.name;
-
-                if (connectedComponents.length > 1) {
-                    const entryNodes = componentNodesData.filter(n => n?.isEntryPoint);
-
-                    if (entryNodes.length > 0 && entryNodes[0]) {
-                        groupName = `${workflow.name} - ${entryNodes[0].label}`;
-                    } else if (llmNodes.length > 0 && llmNodes[0]) {
-                        groupName = `${workflow.name} - ${llmNodes[0].label}`;
-                    } else {
-                        groupName = `${workflow.name} (Part ${compIdx + 1})`;
-                    }
+            // Also add orphan nodes (not in any workflow) to connected workflow
+            if (sourceWf && !targetWf) {
+                // Target node not in any workflow - add it to source's workflow
+                const rootWf = findRoot(sourceWf);
+                const wf = workflowsByBase.get(rootWf);
+                if (wf && !wf.nodeIds.includes(edge.target)) {
+                    wf.nodeIds.push(edge.target);
+                    nodeToWorkflow.set(edge.target, rootWf);
                 }
-
-                // Parse components from workflow metadata
-                const workflowComponents: WorkflowComponent[] = [];
-                const originalWorkflow = data.workflows.find(w => w.id === baseId || w.id === workflow.id);
-                if (originalWorkflow?.components) {
-                    const componentNodeSet = new Set(componentNodes);
-                    originalWorkflow.components.forEach(comp => {
-                        // Only include components whose nodes are all in this connected component
-                        const compNodesInComponent = comp.nodeIds.filter(id => componentNodeSet.has(id));
-                        if (compNodesInComponent.length >= 3 && compNodesInComponent.length === comp.nodeIds.length) {
-                            workflowComponents.push({
-                                id: comp.id,
-                                name: comp.name,
-                                description: comp.description,
-                                nodes: comp.nodeIds,
-                                collapsed: true,  // Default: collapsed
-                                color: colorFromString(comp.id),
-                                workflowId: groupId
-                            });
-                        }
-                    });
+            }
+            if (targetWf && !sourceWf) {
+                // Source node not in any workflow - add it to target's workflow
+                const rootWf = findRoot(targetWf);
+                const wf = workflowsByBase.get(rootWf);
+                if (wf && !wf.nodeIds.includes(edge.source)) {
+                    wf.nodeIds.push(edge.source);
+                    nodeToWorkflow.set(edge.source, rootWf);
                 }
+            }
+        });
 
-                groups.push({
-                    id: groupId,
-                    name: groupName,
-                    description: workflow.description,
-                    nodes: componentNodes,
-                    llmProviders: llmProviders,
-                    collapsed: false,
-                    color: colorFromString(groupId),
-                    level: 1,
-                    components: workflowComponents
+        // Merge workflows based on union-find results
+        const mergedWorkflows = new Map<string, { id: string; name: string; description?: string; nodeIds: string[] }>();
+        workflowsByBase.forEach((wf, wfId) => {
+            const rootId = findRoot(wfId);
+            if (!mergedWorkflows.has(rootId)) {
+                const rootWf = workflowsByBase.get(rootId)!;
+                mergedWorkflows.set(rootId, {
+                    id: rootId,
+                    name: rootWf.name,
+                    description: rootWf.description,
+                    nodeIds: [...rootWf.nodeIds]
                 });
+            }
+            if (wfId !== rootId) {
+                // Merge this workflow's nodes into the root
+                const merged = mergedWorkflows.get(rootId)!;
+                wf.nodeIds.forEach(nodeId => {
+                    if (!merged.nodeIds.includes(nodeId)) {
+                        merged.nodeIds.push(nodeId);
+                    }
+                });
+            }
+        });
+
+        // Process each merged workflow (keep disconnected components together)
+        mergedWorkflows.forEach((workflow, baseId) => {
+            // Get actual node data
+            const workflowNodes = workflow.nodeIds.map(id =>
+                data.nodes.find(n => n.id === id)
+            ).filter(n => n);
+
+            // Find LLM nodes for model names
+            const llmNodes = workflowNodes.filter(n => n?.type === 'llm');
+            const modelNames = llmNodes.map(n => n?.model).filter((m): m is string => !!m);
+            const llmProviders = modelNames.length > 0
+                ? [...new Set(modelNames)].join(', ')
+                : 'LLM';
+
+            // Find connected components and create title node
+            const connectedComponents = findConnectedComponents(
+                workflow.nodeIds,
+                incomingEdges,
+                outgoingEdges
+            );
+
+            // Create title node for the workflow
+            const titleNode = createTitleNode(baseId, workflow.name);
+            const titleNodeId = titleNode.id;
+
+            // Find entry nodes across all components
+            let entryNodeIds: string[] = [];
+            connectedComponents.forEach(component => {
+                const componentEntries = findEntryNodes(component, incomingEdges);
+                entryNodeIds.push(...componentEntries);
+            });
+
+            // Fallback: if no entry nodes found (circular workflow), use first node from each component
+            if (entryNodeIds.length === 0 && connectedComponents.length > 0) {
+                entryNodeIds = connectedComponents.map(comp => comp[0]).filter(Boolean);
+            }
+
+            // Ultimate fallback: connect to first workflow node
+            if (entryNodeIds.length === 0 && workflow.nodeIds.length > 0) {
+                entryNodeIds = [workflow.nodeIds[0]];
+            }
+
+            // Create edges from title to entry nodes
+            const titleEdges = createTitleEdges(titleNodeId, entryNodeIds);
+
+            // Inject title node and edges into graph data
+            data.nodes.push(titleNode);
+            data.edges.push(...titleEdges);
+
+            // Update adjacency lists for the new title node
+            incomingEdges.set(titleNodeId, []);
+            outgoingEdges.set(titleNodeId, titleEdges);
+            titleEdges.forEach(edge => {
+                incomingEdges.get(edge.target)?.push(edge);
+            });
+
+            // Include title node in the workflow
+            workflow.nodeIds.push(titleNodeId);
+
+            // Parse components from workflow metadata
+            const workflowComponents: WorkflowComponent[] = [];
+            const originalWorkflow = data.workflows.find(w => w.id === baseId || w.id === workflow.id);
+            if (originalWorkflow?.components) {
+                originalWorkflow.components.forEach(comp => {
+                    const compNodesInWorkflow = comp.nodeIds.filter(id => workflow.nodeIds.includes(id));
+                    if (compNodesInWorkflow.length >= 3) {
+                        workflowComponents.push({
+                            id: comp.id,
+                            name: comp.name,
+                            description: comp.description,
+                            nodes: comp.nodeIds,
+                            collapsed: true,
+                            color: colorFromString(comp.id),
+                            workflowId: baseId
+                        });
+                    }
+                });
+            }
+
+            groups.push({
+                id: baseId,
+                name: workflow.name,
+                description: workflow.description,
+                nodes: workflow.nodeIds,
+                llmProviders,
+                collapsed: false,
+                color: colorFromString(baseId),
+                level: 1,
+                components: workflowComponents
             });
         });
 

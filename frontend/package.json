@@ -94,7 +94,9 @@
               "description": "Optional: Ending line number (1-indexed)"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -113,7 +115,9 @@
               "description": "Whether to include detailed node information (source file, location, function). Defaults to false for concise output."
             }
           },
-          "required": ["workflowName"]
+          "required": [
+            "workflowName"
+          ]
         }
       },
       {
@@ -159,7 +163,11 @@
           "properties": {
             "operation": {
               "type": "string",
-              "enum": ["path", "upstream", "downstream"],
+              "enum": [
+                "path",
+                "upstream",
+                "downstream"
+              ],
               "description": "Type of navigation: 'path' (find path between nodes), 'upstream' (find predecessors), 'downstream' (find successors)"
             },
             "fromNode": {
@@ -179,7 +187,10 @@
               "description": "Optional: Maximum depth for upstream/downstream searches. Defaults to 5."
             }
           },
-          "required": ["operation", "fromNode"]
+          "required": [
+            "operation",
+            "fromNode"
+          ]
         }
       }
     ]
@@ -207,6 +218,7 @@
     "acorn-jsx": "^5.3.2",
     "acorn-walk": "^8.3.0",
     "axios": "^1.6.0",
-    "dagre": "^0.8.5"
+    "dagre": "^0.8.5",
+    "elkjs": "^0.11.0"
   }
 }

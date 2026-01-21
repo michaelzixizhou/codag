@@ -1,6 +1,7 @@
 import * as acorn from 'acorn';
 import * as jsx from 'acorn-jsx';
 const tsParser = require('@typescript-eslint/typescript-estree');
+import { QUICK_SCAN_PATTERNS, mightContainLLM } from './providers';
 
 export interface CodeLocation {
     line: number;
@@ -19,16 +20,9 @@ export interface FileAnalysis {
     llmRelatedVariables: Set<string>;
 }
 
-// LLM identifier patterns - shared across all analyzers
-const LLM_PATTERNS = [
-    /openai/i, /anthropic/i, /gemini/i, /genai/i,
-    /ollama/i, /cohere/i, /gpt/i, /claude/i,
-    /llm/i, /model/i, /client/i, /chat/i, /completion/i,
-    /GenerativeModel/i, /xai/i, /grok/i,
-    /mistral/i, /together/i, /replicate/i, /fireworks/i,
-    /bedrock/i, /vertexai/i, /ai21/i, /deepseek/i,
-    /llama_index/i, /autogen/i, /haystack/i, /instructor/i
-];
+// LLM identifier patterns - imported from centralized providers.ts
+// NOTE: Be specific! Avoid generic patterns like /model/i that match ORMs
+const LLM_PATTERNS = QUICK_SCAN_PATTERNS;
 
 export class StaticAnalyzer {
     /**

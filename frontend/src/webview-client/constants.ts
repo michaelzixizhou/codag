@@ -43,10 +43,7 @@ export const TRANSITION_FAST = 300;
 export const TRANSITION_NORMAL = 500;
 export const VIEWPORT_UPDATE_DELAY = 150;
 
-// ===== DAGRE LAYOUT =====
-export const DAGRE_NODESEP = 60;
-export const DAGRE_RANKSEP = 42;
-export const DAGRE_MARGIN = 30;
+// ===== LAYOUT =====
 export const WORKFLOW_SPACING = 15;
 
 // ===== INTERACTION =====

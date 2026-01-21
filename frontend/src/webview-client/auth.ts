@@ -28,7 +28,6 @@ let currentAuthState: AuthState = {
  * Update the auth UI based on current state.
  */
 export function updateAuthUI(): void {
-    console.log('[webview-auth] updateAuthUI:', 'isAuthenticated=', currentAuthState.isAuthenticated, 'user=', !!currentAuthState.user);
     const trialTag = document.getElementById('trial-tag');
     const signupBtn = document.getElementById('btn-signup');
     const trialRemaining = document.getElementById('trial-remaining');
@@ -140,7 +139,6 @@ function closeUserDropdown(): void {
  * Update auth state from extension message.
  */
 export function setAuthState(newState: AuthState): void {
-    console.log('[webview-auth] setAuthState received:', JSON.stringify(newState));
     currentAuthState = newState;
     updateAuthUI();
 }

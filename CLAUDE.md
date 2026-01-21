@@ -25,9 +25,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Multi-file analysis: Combines files with `# File: path` markers
 - Deterministic LLM output: Temperature 0.0, specific prompt structure
 - **AST-aware caching**: Only hashes LLM-relevant code (ignores comments/whitespace changes)
-- **Per-file caching**: Each file cached independently; only changed files reanalyzed (no cross-file edges)
+- **Per-file caching**: Each file cached independently; only changed files reanalyzed
 - **Separated SVG layers**: Edge paths container rendered before edge labels container
 - **Workflow connectivity**: All nodes must be reachable via edges, no orphaned nodes
+- **Instant local updates**: Tree-sitter extracts call graphs for immediate graph updates without LLM
+- **Dynamic node sizing**: Node dimensions adapt to text content with CSS-accurate measurement
+- **Live file indicators**: Animated green border shows actively edited nodes in real-time
 
 ## Commands
 
@@ -76,21 +79,19 @@ npm run compile     # Compile TypeScript
 - `frontend/src/cache.ts` - Per-file caching with AST-aware hashing (`getPerFile`, `setPerFile`, `getMultiplePerFile`)
 - `frontend/src/static-analyzer.ts` - TypeScript/Python AST parsing for LLM-relevant code extraction
 - `frontend/src/metadata-builder.ts` - File dependency analysis and batching logic
+- `frontend/src/call-graph-extractor.ts` - Tree-sitter based call graph extraction for instant local updates
+- `frontend/src/local-graph-updater.ts` - Applies call graph diffs to update workflow graphs without LLM
+- `frontend/src/webview-client/helpers.ts` - Dynamic node dimension measurement, group bounds calculation
 - `frontend/src/auth.ts` - AuthManager class, OAuth flow, device ID tracking via `vscode.env.machineId`
 - `frontend/src/api.ts` - APIClient with `X-Device-ID` header, `TrialExhaustedError` handling
 - `frontend/src/webview-client/auth.ts` - Auth panel UI logic, trial tag updates
 
 ## Workflow Node Types
 
-The system identifies 8 node types (defined in Gemini prompt):
-1. **trigger** - Entry points (API endpoints, main functions)
-2. **llm** - LLM API calls
-3. **tool** - Functions called by/available to LLM
-4. **decision** - Conditional logic on LLM output
-5. **integration** - External APIs, databases
-6. **memory** - State/conversation storage
-7. **parser** - Data transformation, formatting
-8. **output** - Return statements, responses
+The system uses 3 node types (defined in Gemini prompt):
+1. **step** - Any processing: API endpoints, functions, parsing, formatting, database calls, returns
+2. **llm** - LLM/AI API calls only (.chat.completions, .generate_content, etc.)
+3. **decision** - Explicit if/else or switch/match branching (must have 2+ labeled outgoing edges)
 
 Each node includes `source: {file, line, function}` for code navigation.
 
@@ -136,11 +137,59 @@ Each node includes `source: {file, line, function}` for code navigation.
   - Hover HUD icon → shows tooltip with icon name
 - **Navigation**: Clicking source link in side panel jumps to code in editor
 - **Styling**: VSCode theme variables, colored icons per node type
-- **Special Indicators**:
-  - Green outline: Entry point nodes (isEntryPoint: true)
-  - Blue outline: Exit point nodes (isExitPoint: true)
+- **Live File Indicators**:
+  - Animated green "neon chase" border: File is being actively edited
+  - Static green border: File changed but no longer being edited
+  - Auto-transitions from animated → static after 4 seconds of inactivity
+  - Only highlights specific functions that changed (uses tree-sitter diff)
 - **Minimap**: Bottom-left corner with viewport rectangle
-- **Legend**: Bottom-left above minimap, shows entry/exit indicators
+
+## Instant Local Updates
+
+When a file changes, the extension performs instant graph updates without calling the LLM:
+
+1. **File watcher** detects change (debounced 500ms)
+2. **Call graph extractor** parses file with tree-sitter (acorn for JS/TS, regex for Python)
+3. **Diff engine** compares new call graph to cached version
+4. **Local updater** applies diff: adds/removes nodes and edges
+5. **Webview** receives updated graph and animates changes
+6. **Metadata batcher** queues new nodes for LLM label generation (background)
+
+**Key files:**
+- `call-graph-extractor.ts` - Extracts functions, calls, LLM API usage
+- `local-graph-updater.ts` - Applies diffs to WorkflowGraph
+- `extension.ts` → `performLocalUpdate()` - Orchestrates the flow
+
+**Cache persistence:** Local updates now persist the graph to cache, so restarting VSCode doesn't trigger re-analysis for unchanged files.
+
+## Cross-Batch Structure Preservation
+
+When analyzing large repos that require multiple batches, cross-file workflow connections are preserved through a two-phase LLM approach:
+
+**Phase 1: Structure Condensation**
+1. Tree-sitter extracts raw structure from ALL files (functions, calls, exports)
+2. Raw structure sent to Gemini for condensation
+3. LLM filters out irrelevant files, identifies workflow entry points
+4. Returns condensed `<workflow_structure>` XML
+
+**Phase 2: Batch Analysis with Context**
+1. Each batch receives the SAME condensed structure as context
+2. LLM sees full workflow picture, creates edges to functions in other batches
+3. Edge targets use `file:function` format for cross-batch references
+4. Post-process resolves `file:function` references to actual node IDs
+
+**Key files:**
+- `repo-structure.ts` - Tree-sitter extraction, `formatStructureForLLM()`
+- `edge-resolver.ts` - `resolveExternalEdges()` post-processing
+- `prompts.py` - `CONDENSATION_SYSTEM_PROMPT` for structure filtering
+- `gemini_client.py` - `condense_repo_structure()` method
+
+**Example flow:**
+```
+extension.ts → extractRepoStructure() → api.condenseStructure()
+             → analyzeBatch(batch, ..., condensedStructure)
+             → getMergedGraph() → resolveExternalEdges()
+```
 
 ## Authentication & Trial System
 

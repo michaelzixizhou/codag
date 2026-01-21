@@ -748,9 +748,13 @@ body {
 }
 #minimap .minimap-edge {
     stroke: var(--vscode-editor-foreground);
-    stroke-width: 1px;
-    opacity: 0.5;
+    stroke-width: 1.5px;
+    opacity: 0.6;
     fill: none;
+}
+#minimap .minimap-connector {
+    fill: var(--vscode-editor-foreground);
+    opacity: 0.5;
 }
 #minimap .minimap-viewport {
     fill: none;
@@ -1103,30 +1107,6 @@ body {
     pointer-events: none;
 }
 
-/* LLM badge in toggle button */
-.toggle-btn .llm-badge {
-    margin-left: 2px;
-}
-
-/* LLM button detecting state */
-.toggle-btn.detecting {
-    cursor: wait;
-}
-
-.toggle-btn.detecting:hover {
-    background: transparent;
-    border-color: var(--vscode-input-border);
-}
-
-.toggle-btn.detecting .llm-badge {
-    animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 1; }
-}
-
 .file-picker-search {
     flex: 1;
 }
@@ -1299,40 +1279,6 @@ body {
     color: var(--vscode-foreground);
 }
 
-/* Files with confirmed LLM calls - highlighted */
-.file-picker-item.is-file.has-llm-calls .item-name {
-    color: var(--vscode-charts-green, #89d185);
-}
-
-/* Files without LLM calls - dimmed */
-.file-picker-item.is-file.no-llm-calls .item-name {
-    color: var(--vscode-disabledForeground);
-    opacity: 0.7;
-}
-
-.llm-badge {
-    margin-left: 8px;
-    padding: 1px 6px;
-    font-size: 9px;
-    font-weight: 600;
-    background: var(--vscode-charts-green, #89d185);
-    color: var(--vscode-editor-background);
-    border-radius: 3px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.llm-badge-inline {
-    padding: 1px 5px;
-    font-size: 10px;
-    font-weight: 600;
-    background: var(--vscode-charts-green, #89d185);
-    color: var(--vscode-editor-background);
-    border-radius: 3px;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-
 .file-picker-footer {
     padding: 12px 20px;
     border-top: 1px solid var(--vscode-panel-border);
@@ -1449,5 +1395,55 @@ body {
     .panel-section label { font-size: 8px; }
     .type-badge { font-size: 9px; padding: 2px 6px; }
     .source-link { font-size: 9px; }
+}
+
+/* ===========================================
+   Live File Change Indicators
+   =========================================== */
+
+/* Static green border - file has changed but not actively editing */
+.node-border.file-changed {
+    stroke: #00ff00 !important;
+    stroke-width: 1px !important;
+    transition: stroke 0.3s ease;
+}
+
+/* Animated neon chase border - file is being actively edited */
+.node-border.file-active {
+    stroke: #00ff00 !important;
+    stroke-width: 1px !important;
+    stroke-dasharray: 4 2;
+    stroke-linecap: round;
+    animation: neon-chase 0.5s linear infinite, neon-pulse 1.5s ease-in-out infinite;
+    filter: drop-shadow(0 0 3px rgba(0, 255, 0, 0.6)) drop-shadow(0 0 6px rgba(0, 255, 0, 0.3));
+}
+
+@keyframes neon-chase {
+    0% { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: -12; }
+}
+
+@keyframes neon-pulse {
+    0%, 100% {
+        filter: drop-shadow(0 0 3px rgba(0, 255, 0, 0.6)) drop-shadow(0 0 6px rgba(0, 255, 0, 0.3));
+    }
+    50% {
+        filter: drop-shadow(0 0 4px rgba(0, 255, 0, 0.8)) drop-shadow(0 0 8px rgba(0, 255, 0, 0.4));
+    }
+}
+
+/* Minimap file change indicators */
+.minimap-node.file-changed {
+    fill: rgba(0, 255, 0, 0.8) !important;
+}
+
+.minimap-node.file-active {
+    fill: rgba(0, 255, 0, 0.8) !important;
+    animation: minimap-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes minimap-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
 }
 

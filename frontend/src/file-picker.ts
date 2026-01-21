@@ -5,7 +5,6 @@ const SELECTION_CACHE_KEY = 'codag.fileSelection';
 
 interface FileSelectionEntry {
     selected: boolean;
-    hasActualLLMCalls: boolean | null;  // null = not analyzed yet
 }
 
 interface FileSelectionCache {
@@ -22,7 +21,6 @@ export interface FileTreeNode {
     isDirectory: boolean;
     depth: number;
     selected: boolean;
-    hasLLMCalls: boolean | null;  // null = unknown, true = confirmed, false = none
     children: FileTreeNode[];
 }
 
@@ -47,28 +45,6 @@ async function saveSelectionCache(
 }
 
 /**
- * Update which files have actual LLM calls based on analysis results
- */
-export async function updateLLMStatus(
-    context: vscode.ExtensionContext,
-    analyzedFiles: string[],
-    filesWithLLMCalls: string[]
-): Promise<void> {
-    const cache = getSelectionCache(context);
-    const llmSet = new Set(filesWithLLMCalls);
-
-    // Mark all analyzed files
-    for (const file of analyzedFiles) {
-        if (!cache.files[file]) {
-            cache.files[file] = { selected: true, hasActualLLMCalls: null };
-        }
-        cache.files[file].hasActualLLMCalls = llmSet.has(file);
-    }
-
-    await saveSelectionCache(context, cache);
-}
-
-/**
  * Save selection from webview file picker result
  */
 export async function saveFilePickerSelection(
@@ -82,10 +58,7 @@ export async function saveFilePickerSelection(
     for (const file of allFiles) {
         const isSelected = selectedSet.has(file.fsPath);
         if (!cache.files[file.fsPath]) {
-            cache.files[file.fsPath] = {
-                selected: isSelected,
-                hasActualLLMCalls: null
-            };
+            cache.files[file.fsPath] = { selected: isSelected };
         } else {
             cache.files[file.fsPath].selected = isSelected;
         }
@@ -124,7 +97,6 @@ export function buildFileTree(
         isDirectory: true,
         depth: 0,
         selected: false,
-        hasLLMCalls: null,
         children: []
     };
 
@@ -149,16 +121,12 @@ export function buildFileTree(
                     ? (cached !== undefined ? cached.selected : true)
                     : false;
 
-                // Get LLM status from cache
-                const hasLLMCalls = isLast ? (cached?.hasActualLLMCalls ?? null) : null;
-
                 child = {
                     path: currentPath,  // Both files and directories get paths
                     name: part,
                     isDirectory: !isLast,
                     depth: i + 1,
                     selected: isSelected,
-                    hasLLMCalls: hasLLMCalls,
                     children: []
                 };
                 current.children.push(child);
@@ -180,7 +148,6 @@ function createEmptyRoot(): FileTreeNode {
         isDirectory: true,
         depth: 0,
         selected: false,
-        hasLLMCalls: null,
         children: []
     };
 }

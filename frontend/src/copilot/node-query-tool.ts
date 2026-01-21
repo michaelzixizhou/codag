@@ -32,7 +32,7 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
             console.log('[node-query] Query:', JSON.stringify(input));
 
             // Get the complete workflow graph
-            const graph = await this.cacheManager.getMostRecentWorkflows();
+            const graph = await this.cacheManager.getMergedGraph();
             if (!graph) {
                 return new vscode.LanguageModelToolResult([
                     new vscode.LanguageModelTextPart('No workflow data found. Please run visualization first.')
@@ -53,7 +53,7 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
 
             // Filter by workflow name
             if (input.workflowName) {
-                const workflow = graph.workflows.find(wf =>
+                const workflow = graph.workflows.find((wf: any) =>
                     wf.name.toLowerCase().includes(input.workflowName!.toLowerCase())
                 );
                 if (workflow) {
@@ -88,8 +88,8 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
             // Filter to shared nodes (appear in multiple workflows)
             if (input.shared) {
                 const nodeWorkflowCount = new Map<string, number>();
-                graph.workflows.forEach(wf => {
-                    wf.nodeIds.forEach(id => {
+                graph.workflows.forEach((wf: any) => {
+                    wf.nodeIds.forEach((id: string) => {
                         nodeWorkflowCount.set(id, (nodeWorkflowCount.get(id) || 0) + 1);
                     });
                 });
@@ -131,8 +131,8 @@ class NodeQueryTool implements vscode.LanguageModelTool<NodeQueryInput> {
                 const location = node.source ? `→ ${node.source.file}:${node.source.line}` : '';
 
                 // Find which workflow(s) this node belongs to
-                const nodeWorkflows = graph.workflows.filter(wf => wf.nodeIds.includes(node.id));
-                const workflowInfo = nodeWorkflows.length > 0 ? ` ⟵ ${nodeWorkflows.map(wf => wf.name).join(', ')}` : '';
+                const nodeWorkflows = graph.workflows.filter((wf: any) => wf.nodeIds.includes(node.id));
+                const workflowInfo = nodeWorkflows.length > 0 ? ` ⟵ ${nodeWorkflows.map((wf: any) => wf.name).join(', ')}` : '';
 
                 parts.push(`${sym} ${link} ${location}${workflowInfo}`);
 

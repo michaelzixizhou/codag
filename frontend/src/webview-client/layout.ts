@@ -1,18 +1,18 @@
-// Dagre layout and workflow grid tiling
+// ELK layout and workflow grid tiling
 import * as state from './state';
 import { snapToGrid, getNodeWorkflowCount, getVirtualNodeId } from './utils';
 import { createWorkflowPattern } from './setup';
 import { measureNodeDimensions } from './helpers';
+import { measureTextWidth } from './groups';
+import { layoutWithELK, EdgeRoute } from './elk-layout';
 import {
     NODE_WIDTH, NODE_HEIGHT,
-    DAGRE_NODESEP, DAGRE_RANKSEP, DAGRE_MARGIN,
     WORKFLOW_SPACING,
     GROUP_BOUNDS_PADDING_X, GROUP_BOUNDS_PADDING_TOP, GROUP_BOUNDS_PADDING_BOTTOM,
     COMPONENT_PADDING
 } from './constants';
 import { WorkflowComponent } from './types';
 
-declare const dagre: any;
 declare const d3: any;
 
 /**
@@ -36,6 +36,7 @@ interface WorkflowLayoutData {
     group: any;
     nodes: any[];
     localPositions: Map<string, { x: number; y: number }>;
+    localEdgeRoutes: Map<string, EdgeRoute>;  // Edge routes in local coords
     width: number;
     height: number;
     offsetX: number;
@@ -45,59 +46,78 @@ interface WorkflowLayoutData {
     localBoundsMinY: number;
 }
 
-export function layoutWorkflows(defs: any): void {
+export async function layoutWorkflows(defs: any): Promise<void> {
     const { currentGraphData, workflowGroups, originalPositions, g } = state;
     const expandedComponents = state.getExpandedComponents();
 
     const layoutData: WorkflowLayoutData[] = [];
 
-    // ========== PASS 1: Layout each workflow individually with dagre ==========
+    // ========== PASS 1: Layout each workflow individually with ELK ==========
     // All nodes are laid out normally - components don't affect layout
-    workflowGroups.forEach((group, idx) => {
+    for (const group of workflowGroups) {
         const allGroupNodes = currentGraphData.nodes.filter((n: any) =>
             group.nodes.includes(n.id)
         );
 
-        if (allGroupNodes.length < 3) return;
+        if (allGroupNodes.length < 3) continue;
 
         const components = group.components || [];
 
-        // Create dagre graph for this workflow
-        const dagreGraph = new dagre.graphlib.Graph();
-        dagreGraph.setGraph({
-            rankdir: 'TB',
-            nodesep: DAGRE_NODESEP,
-            ranksep: DAGRE_RANKSEP,
-            marginx: DAGRE_MARGIN,
-            marginy: DAGRE_MARGIN
-        });
-        dagreGraph.setDefaultEdgeLabel(() => ({}));
+        // Prepare nodes for ELK layout
+        const elkNodes: Array<{ id: string; width: number; height: number }> = [];
 
-        // Add ALL nodes to dagre (components don't change layout)
         allGroupNodes.forEach((node: any) => {
-            const dims = measureNodeDimensions(node.label || node.id);
-            node.width = dims.width;
-            node.height = dims.height;
-            dagreGraph.setNode(node.id, { width: dims.width, height: dims.height });
+            // Title nodes use larger font
+            const measureOptions = node.type === 'workflow-title' ? {
+                fontSize: '16px',
+                fontWeight: '600',
+                minWidth: 100,
+                maxWidth: 280,
+                horizontalPadding: 24,  // More padding for pill shape
+                verticalPadding: 16
+            } : undefined;
+
+            const dims = measureNodeDimensions(node.label || node.id, measureOptions);
+            // Store original text area dimensions for foreignObject
+            node._textWidth = dims.width;
+            node._textHeight = dims.height;
+            // Decision nodes use hexagon shape - add slight width for the pointed ends
+            if (node.type === 'decision') {
+                node.width = dims.width * 1.08;  // Extra width for hexagon points (reduced for smaller indent)
+                node.height = dims.height;
+            } else {
+                node.width = dims.width;
+                node.height = dims.height;
+            }
+            elkNodes.push({ id: node.id, width: node.width, height: node.height });
         });
 
-        // Add all edges
+        // Prepare edges for ELK layout
+        const elkEdges: Array<{ source: string; target: string; id: string }> = [];
+        const seenEdges = new Set<string>();
         currentGraphData.edges.forEach((edge: any) => {
             if (group.nodes.includes(edge.source) && group.nodes.includes(edge.target)) {
-                if (!dagreGraph.hasEdge(edge.source, edge.target)) {
-                    dagreGraph.setEdge(edge.source, edge.target);
+                const edgeKey = `${edge.source}->${edge.target}`;
+                if (!seenEdges.has(edgeKey)) {
+                    seenEdges.add(edgeKey);
+                    elkEdges.push({
+                        source: edge.source,
+                        target: edge.target,
+                        id: `${group.id}_${edgeKey}`
+                    });
                 }
             }
         });
 
-        dagre.layout(dagreGraph);
+        // Run ELK layout
+        const { positions: elkPositions, edgeRoutes } = await layoutWithELK(elkNodes, elkEdges);
 
         // Store LOCAL positions (no global offset yet)
         const localPositions = new Map<string, { x: number; y: number }>();
 
         // Store positions for all nodes
         allGroupNodes.forEach((node: any) => {
-            const pos = dagreGraph.node(node.id);
+            const pos = elkPositions.get(node.id);
             if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
                 const isShared = getNodeWorkflowCount(node.id, workflowGroups) > 1;
                 const key = isShared ? getVirtualNodeId(node.id, group.id) : node.id;
@@ -107,12 +127,13 @@ export function layoutWorkflows(defs: any): void {
 
         // Calculate local bounds using actual node edges
         const positionEntries = Array.from(localPositions.entries());
-        if (positionEntries.length === 0) return;
+        if (positionEntries.length === 0) continue;
 
         // Build array with position + dimensions for each node
         const nodesWithBounds = positionEntries.map(([key, pos]) => {
             // Find node to get its dynamic dimensions
-            const nodeId = key.includes('__') ? key.split('__')[0] : key;
+            // Shared nodes have keys like "nodeId__groupId", title nodes have "__title_..."
+            const nodeId = key.startsWith('__title_') ? key : (key.includes('__') ? key.split('__')[0] : key);
             const node = allGroupNodes.find((n: any) => n.id === nodeId);
             const width = node?.width || NODE_WIDTH;
             const height = node?.height || NODE_HEIGHT;
@@ -120,9 +141,19 @@ export function layoutWorkflows(defs: any): void {
         });
 
         // Calculate bounds using actual node edges (tight fit)
+        const nodeMinX = Math.min(...nodesWithBounds.map(n => n.x - n.width / 2)) - GROUP_BOUNDS_PADDING_X;
+        const nodeMaxX = Math.max(...nodesWithBounds.map(n => n.x + n.width / 2)) + GROUP_BOUNDS_PADDING_X;
+
+        // Ensure bounds are wide enough for the workflow title
+        const titleText = `${group.name} (${group.nodes.length} nodes)`;
+        const titleWidth = measureTextWidth(titleText, '17px', '500', '"Inter", "Segoe UI", sans-serif') + 10; // +10 for padding
+        const nodeWidth = nodeMaxX - nodeMinX;
+        const finalWidth = Math.max(nodeWidth, titleWidth);
+        const widthDiff = finalWidth - nodeWidth;
+
         const localBounds = {
-            minX: Math.min(...nodesWithBounds.map(n => n.x - n.width / 2)) - GROUP_BOUNDS_PADDING_X,
-            maxX: Math.max(...nodesWithBounds.map(n => n.x + n.width / 2)) + GROUP_BOUNDS_PADDING_X,
+            minX: nodeMinX - widthDiff / 2,  // Center the extra width
+            maxX: nodeMaxX + widthDiff / 2,
             minY: Math.min(...nodesWithBounds.map(n => n.y - n.height / 2)) - GROUP_BOUNDS_PADDING_TOP,
             maxY: Math.max(...nodesWithBounds.map(n => n.y + n.height / 2)) + GROUP_BOUNDS_PADDING_BOTTOM
         };
@@ -134,6 +165,7 @@ export function layoutWorkflows(defs: any): void {
             group,
             nodes: allGroupNodes,
             localPositions,
+            localEdgeRoutes: edgeRoutes,  // Store for transformation in PASS 3
             width,
             height,
             offsetX: 0,
@@ -142,7 +174,10 @@ export function layoutWorkflows(defs: any): void {
             localBoundsMinX: localBounds.minX,
             localBoundsMinY: localBounds.minY
         });
-    });
+    }
+
+    // Will be populated in PASS 3 after transformation
+    const allElkEdgeRoutes = new Map<string, EdgeRoute>();
 
     // ========== PASS 2: Radial corner-packing layout ==========
     if (layoutData.length > 0) {
@@ -150,9 +185,6 @@ export function layoutWorkflows(defs: any): void {
 
         // Sort by area descending (largest first)
         const sortedData = [...layoutData].sort((a, b) => (b.width * b.height) - (a.width * a.height));
-
-        console.log('[layout] PASS 2: Radial corner-packing');
-        console.log('[layout] Sorted workflows by area:', sortedData.map(d => ({ name: d.group.name, w: d.width, h: d.height, area: d.width * d.height })));
 
         // Placed workflows: { x, y, w, h } where x,y is top-left corner
         const placed: { x: number; y: number; w: number; h: number; name: string }[] = [];
@@ -210,7 +242,6 @@ export function layoutWorkflows(defs: any): void {
                 data.offsetX = 0;
                 data.offsetY = 0;
                 placed.push({ x: 0, y: 0, w, h, name: data.group.name });
-                console.log(`[layout] Placed #0 "${data.group.name}" at (0, 0), size ${w}x${h}`);
                 return;
             }
 
@@ -220,25 +251,19 @@ export function layoutWorkflows(defs: any): void {
                 data.offsetX = first.x + first.w + S;
                 data.offsetY = first.y; // top-aligned
                 placed.push({ x: data.offsetX, y: data.offsetY, w, h, name: data.group.name });
-                console.log(`[layout] Placed #1 "${data.group.name}" at (${data.offsetX}, ${data.offsetY}), size ${w}x${h}`);
-                console.log(`[layout]   - first.x=${first.x}, first.w=${first.w}, S=${S}, first.y=${first.y}`);
                 return;
             }
 
             // Find all corners
             const corners = getCorners(w, h);
-            console.log(`[layout] Finding position for #${idx} "${data.group.name}", size ${w}x${h}`);
-            console.log(`[layout]   - ${corners.length} corner candidates`);
 
             // Find valid corner closest to center
             let bestPos: { x: number; y: number } | null = null;
             let bestDist = Infinity;
 
-            const validCorners: { x: number; y: number; dist: number }[] = [];
             for (const pos of corners) {
                 if (!overlaps(pos.x, pos.y, w, h)) {
                     const dist = distToCenter(pos.x, pos.y, w, h);
-                    validCorners.push({ ...pos, dist });
                     if (dist < bestDist) {
                         bestDist = dist;
                         bestPos = pos;
@@ -246,42 +271,31 @@ export function layoutWorkflows(defs: any): void {
                 }
             }
 
-            console.log(`[layout]   - ${validCorners.length} valid corners:`, validCorners.slice(0, 5));
-
             if (bestPos) {
                 data.offsetX = bestPos.x;
                 data.offsetY = bestPos.y;
-                console.log(`[layout] Placed #${idx} "${data.group.name}" at (${bestPos.x}, ${bestPos.y}), dist=${bestDist.toFixed(1)}`);
             } else {
                 // Fallback: place to the right of everything
                 const maxRight = Math.max(...placed.map(p => p.x + p.w));
                 data.offsetX = maxRight + S;
                 data.offsetY = 0;
-                console.log(`[layout] Placed #${idx} "${data.group.name}" at FALLBACK (${data.offsetX}, 0)`);
             }
 
             placed.push({ x: data.offsetX, y: data.offsetY, w, h, name: data.group.name });
         });
 
-        console.log('[layout] Final placed array:', placed);
-
         // Normalize: shift so min is at (0, 0)
         const minX = Math.min(...sortedData.map(d => d.offsetX));
         const minY = Math.min(...sortedData.map(d => d.offsetY));
-        console.log(`[layout] Normalizing: minX=${minX}, minY=${minY}`);
         sortedData.forEach((data) => {
             data.offsetX -= minX;
             data.offsetY -= minY;
         });
-
-        console.log('[layout] After normalization:', sortedData.map(d => ({ name: d.group.name, offsetX: d.offsetX, offsetY: d.offsetY })));
     }
 
     // ========== PASS 3: Apply global offsets and finalize positions ==========
     layoutData.forEach((data) => {
-        const { group, nodes, localPositions, offsetX, offsetY, components, localBoundsMinX, localBoundsMinY } = data;
-
-        console.log(`[layout] PASS 3: "${group.name}" - offsetX=${offsetX.toFixed(1)}, offsetY=${offsetY.toFixed(1)}, localBoundsMin=(${localBoundsMinX.toFixed(1)}, ${localBoundsMinY.toFixed(1)}), PASS1 size=(${data.width.toFixed(1)}, ${data.height.toFixed(1)})`);
+        const { group, nodes, localPositions, localEdgeRoutes, offsetX, offsetY, components, localBoundsMinX, localBoundsMinY } = data;
 
         // Apply offset to ALL node positions
         // Normalize by subtracting localBounds origin so positions start at (0,0)
@@ -306,6 +320,19 @@ export function layoutWorkflows(defs: any): void {
             }
         });
 
+        // Transform edge routes with same offset as nodes
+        localEdgeRoutes.forEach((route, edgeId) => {
+            const transformPoint = (p: { x: number; y: number }) => ({
+                x: p.x - localBoundsMinX + offsetX,
+                y: p.y - localBoundsMinY + offsetY
+            });
+            allElkEdgeRoutes.set(edgeId, {
+                startPoint: transformPoint(route.startPoint),
+                endPoint: transformPoint(route.endPoint),
+                bendPoints: route.bendPoints.map(transformPoint)
+            });
+        });
+
         // Calculate component bounds from their actual node positions
         components.forEach((comp: WorkflowComponent) => {
             const compNodes = nodes.filter((n: any) => comp.nodes.includes(n.id));
@@ -326,28 +353,30 @@ export function layoutWorkflows(defs: any): void {
             if (nodePositions.length === 0) return;
 
             // Calculate bounds from node positions (with padding)
+            // Round to integers to avoid sub-pixel jitter
             comp.bounds = {
-                minX: Math.min(...nodePositions.map((p: any) => p.x - p.w / 2)) - COMPONENT_PADDING,
-                maxX: Math.max(...nodePositions.map((p: any) => p.x + p.w / 2)) + COMPONENT_PADDING,
-                minY: Math.min(...nodePositions.map((p: any) => p.y - p.h / 2)) - COMPONENT_PADDING,
-                maxY: Math.max(...nodePositions.map((p: any) => p.y + p.h / 2)) + COMPONENT_PADDING
+                minX: Math.round(Math.min(...nodePositions.map((p: any) => p.x - p.w / 2)) - COMPONENT_PADDING),
+                maxX: Math.round(Math.max(...nodePositions.map((p: any) => p.x + p.w / 2)) + COMPONENT_PADDING),
+                minY: Math.round(Math.min(...nodePositions.map((p: any) => p.y - p.h / 2)) - COMPONENT_PADDING),
+                maxY: Math.round(Math.max(...nodePositions.map((p: any) => p.y + p.h / 2)) + COMPONENT_PADDING)
             };
-            comp.centerX = (comp.bounds.minX + comp.bounds.maxX) / 2;
-            comp.centerY = (comp.bounds.minY + comp.bounds.maxY) / 2;
+            comp.centerX = Math.round((comp.bounds.minX + comp.bounds.maxX) / 2);
+            comp.centerY = Math.round((comp.bounds.minY + comp.bounds.maxY) / 2);
         });
 
         // Use the exact bounds we calculated in PASS 1 and positioned in PASS 2
         // No recalculation - just apply the offset to get final bounds
+        // Round to integers to avoid sub-pixel jitter on updates
         group.bounds = {
-            minX: offsetX,
-            maxX: offsetX + data.width,
-            minY: offsetY,
-            maxY: offsetY + data.height
+            minX: Math.round(offsetX),
+            maxX: Math.round(offsetX + data.width),
+            minY: Math.round(offsetY),
+            maxY: Math.round(offsetY + data.height)
         };
-        group.centerX = (group.bounds.minX + group.bounds.maxX) / 2;
-        group.centerY = (group.bounds.minY + group.bounds.maxY) / 2;
-
-        console.log(`[layout] PASS 3: "${group.name}" bounds: (${offsetX}, ${offsetY}) -> (${offsetX + data.width}, ${offsetY + data.height})`);
+        // Store layout bounds separately for formatGraph to use
+        group._layoutBounds = { ...group.bounds };
+        group.centerX = Math.round((group.bounds.minX + group.bounds.maxX) / 2);
+        group.centerY = Math.round((group.bounds.minY + group.bounds.maxY) / 2);
     });
 
     // Create colored dot patterns for each workflow group
@@ -356,6 +385,7 @@ export function layoutWorkflows(defs: any): void {
     });
 
     state.setOriginalPositions(originalPositions);
+    state.setElkEdgeRoutes(allElkEdgeRoutes);
 
     // Build a map of which nodes are in collapsed components
     const nodesInCollapsedComponents = new Set<string>();

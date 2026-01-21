@@ -13,54 +13,98 @@ import { measureTextWidth } from './groups';
 
 declare const d3: any;
 
+export interface NodeMeasureOptions {
+    fontSize?: string;
+    fontWeight?: string;
+    minWidth?: number;
+    maxWidth?: number;
+    horizontalPadding?: number;
+    verticalPadding?: number;
+}
+
 /**
  * Measure node dimensions based on label text with wrapping
- * Returns width and height that fits the text content
+ * Uses actual SVG foreignObject rendering to get accurate dimensions
+ * Dynamic width: finds the tightest fit for both single and multi-line text
  */
-export function measureNodeDimensions(label: string): { width: number; height: number } {
+export function measureNodeDimensions(label: string, options?: NodeMeasureOptions): { width: number; height: number } {
     const fontFamily = '"DM Sans", "Inter", "Segoe UI", -apple-system, sans-serif';
-    const fontSize = 15;
-    const lineHeight = 20;  // Increased for better spacing
-    const horizontalPadding = 16;  // 8px on each side (matches foreignObject x offset)
-    const minWidth = 80;
-    const maxWidth = 200;
-    const verticalPadding = 12;  // 6px on each side
+    const fontSize = options?.fontSize || '15px';
+    const fontWeight = options?.fontWeight || '400';
+    const minWidth = options?.minWidth || 80;
+    const maxWidth = options?.maxWidth || 200;
+    const horizontalPadding = options?.horizontalPadding || 16;  // 8px on each side
+    const verticalPadding = options?.verticalPadding || 12;    // 6px on each side
 
-    const textWidth = measureTextWidth(label, `${fontSize}px`, '400', fontFamily);
+    // Create temp container in body (not SVG) for accurate HTML measurement
+    const container = d3.select('body').append('div')
+        .style('visibility', 'hidden')
+        .style('position', 'absolute')
+        .style('left', '-9999px');
 
-    // Available text space inside max-width node (foreignObject uses nodeWidth - 8)
-    // Add 10% safety buffer for SVG vs CSS measurement differences
-    const maxTextSpace = (maxWidth - 8) * 0.90;
+    // First pass: measure unconstrained single-line width
+    const singleLineDiv = container.append('div')
+        .style('display', 'inline-block')
+        .style('white-space', 'nowrap')
+        .style('font-family', fontFamily)
+        .style('font-size', fontSize)
+        .style('font-weight', fontWeight)
+        .style('line-height', '1.2')
+        .text(label);
 
-    // If text fits in one line within max width (with safety margin)
-    if (textWidth <= maxTextSpace) {
-        const width = Math.max(minWidth, textWidth + horizontalPadding);
-        const height = lineHeight + verticalPadding;
-        return { width, height };
+    const singleLineWidth = (singleLineDiv.node() as HTMLElement).offsetWidth;
+    singleLineDiv.remove();
+
+    // If fits in one line, use actual width (threshold matches foreignObject width: maxWidth - 8)
+    if (singleLineWidth <= maxWidth - 8) {
+        const width = Math.max(minWidth, singleLineWidth + horizontalPadding);
+        const singleLineHeight = Math.ceil(parseFloat(fontSize) * 1.2);
+        container.remove();
+        return { width, height: singleLineHeight + verticalPadding };
     }
 
-    // Calculate number of lines needed using actual available width
-    const words = label.split(' ');
-    let lines = 1;
-    let currentLineWidth = 0;
+    // Second pass: constrain to maxWidth and measure wrapped content
+    const wrappedDiv = container.append('div')
+        .attr('lang', 'en')
+        .style('width', `${maxWidth - 8}px`)  // Same as foreignObject width
+        .style('font-family', fontFamily)
+        .style('font-size', fontSize)
+        .style('font-weight', fontWeight)
+        .style('line-height', '1.2')
+        .style('word-wrap', 'break-word')
+        .style('overflow-wrap', 'break-word')
+        .style('hyphens', 'auto')
+        .style('-webkit-hyphens', 'auto')
+        .style('text-align', 'center')
+        .text(label);
 
-    for (const word of words) {
-        const wordWidth = measureTextWidth(word, `${fontSize}px`, '400', fontFamily);
-        const spaceWidth = measureTextWidth(' ', `${fontSize}px`, '400', fontFamily);
+    const wrappedHeight = (wrappedDiv.node() as HTMLElement).offsetHeight;
 
-        // Check if word fits on current line (with space if not first word on line)
-        const neededWidth = currentLineWidth > 0 ? wordWidth + spaceWidth : wordWidth;
+    // Third pass: find tightest width that maintains same height
+    // Binary search for minimum width that doesn't increase height
+    let lo = minWidth - horizontalPadding;
+    let hi = maxWidth - horizontalPadding;
+    let optimalWidth = hi;
 
-        if (currentLineWidth + neededWidth > maxTextSpace && currentLineWidth > 0) {
-            lines++;
-            currentLineWidth = wordWidth;
+    while (lo <= hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        wrappedDiv.style('width', `${mid}px`);
+        const testHeight = (wrappedDiv.node() as HTMLElement).offsetHeight;
+
+        if (testHeight <= wrappedHeight) {
+            optimalWidth = mid;
+            hi = mid - 1;
         } else {
-            currentLineWidth += neededWidth;
+            lo = mid + 1;
         }
     }
 
-    const height = (lines * lineHeight) + verticalPadding;
-    return { width: maxWidth, height };
+    container.remove();
+
+    return {
+        width: Math.max(minWidth, optimalWidth + horizontalPadding),
+        height: wrappedHeight + verticalPadding
+    };
 }
 
 /**
@@ -88,7 +132,7 @@ export function getNodeDimensions(node: any): { width: number; height: number } 
 /**
  * Calculate group bounds from node positions
  * Uses node CENTERS + max dimensions for consistent alignment across workflows
- * This ensures bounding boxes align when dagre-aligned node centers are at the same position
+ * This ensures bounding boxes align when ELK-aligned node centers are at the same position
  */
 export function calculateGroupBounds(nodes: any[]): {
     bounds: { minX: number; maxX: number; minY: number; maxY: number };
@@ -102,17 +146,18 @@ export function calculateGroupBounds(nodes: any[]): {
     if (validNodes.length === 0) return null;
 
     // Calculate bounds using actual node edges (tight fit)
+    // Round to integers to avoid sub-pixel jitter
     const bounds = {
-        minX: Math.min(...validNodes.map((n: any) => n.x - (n.width || NODE_WIDTH) / 2)) - GROUP_BOUNDS_PADDING_X,
-        maxX: Math.max(...validNodes.map((n: any) => n.x + (n.width || NODE_WIDTH) / 2)) + GROUP_BOUNDS_PADDING_X,
-        minY: Math.min(...validNodes.map((n: any) => n.y - (n.height || NODE_HEIGHT) / 2)) - GROUP_BOUNDS_PADDING_TOP,
-        maxY: Math.max(...validNodes.map((n: any) => n.y + (n.height || NODE_HEIGHT) / 2)) + GROUP_BOUNDS_PADDING_BOTTOM
+        minX: Math.round(Math.min(...validNodes.map((n: any) => n.x - (n.width || NODE_WIDTH) / 2)) - GROUP_BOUNDS_PADDING_X),
+        maxX: Math.round(Math.max(...validNodes.map((n: any) => n.x + (n.width || NODE_WIDTH) / 2)) + GROUP_BOUNDS_PADDING_X),
+        minY: Math.round(Math.min(...validNodes.map((n: any) => n.y - (n.height || NODE_HEIGHT) / 2)) - GROUP_BOUNDS_PADDING_TOP),
+        maxY: Math.round(Math.max(...validNodes.map((n: any) => n.y + (n.height || NODE_HEIGHT) / 2)) + GROUP_BOUNDS_PADDING_BOTTOM)
     };
 
     return {
         bounds,
-        centerX: (bounds.minX + bounds.maxX) / 2,
-        centerY: (bounds.minY + bounds.maxY) / 2
+        centerX: Math.round((bounds.minX + bounds.maxX) / 2),
+        centerY: Math.round((bounds.minY + bounds.maxY) / 2)
     };
 }
 

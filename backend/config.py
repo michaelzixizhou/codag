@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     google_client_id: Optional[str] = None
     google_client_secret: Optional[str] = None
 
+    # Optional additional API keys
+    deepseek_api_key: Optional[str] = None
+
     # Backend URL (for OAuth callbacks)
     backend_url: str = "http://localhost:8000"
 

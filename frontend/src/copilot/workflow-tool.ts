@@ -58,7 +58,10 @@ export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToo
       }
 
       // Get cached workflow data for this specific file
-      const graph = await this.cacheManager.getPerFile(filePath, fileContent);
+      const hash = this.cacheManager.hashContentAST(fileContent, filePath);
+      const graph = this.cacheManager.isFileValid(filePath, hash)
+        ? await this.cacheManager.getMergedGraph([filePath])
+        : null;
 
       if (!graph) {
         console.log('❌ [Workflow Tool] No workflow data found for file');
@@ -189,8 +192,7 @@ export class WorkflowContextTool implements vscode.LanguageModelTool<WorkflowToo
       parts.push(`## Workflows`);
       metadata.workflows.forEach(wf => {
         parts.push(`### ${wf.name}`);
-        parts.push(`- Entry points: ${wf.entryPoints.join(', ')}`);
-        parts.push(`- Exit points: ${wf.exitPoints.join(', ')}`);
+        parts.push(`- Nodes: ${wf.nodeIds.length}`);
         parts.push('');
       });
     }

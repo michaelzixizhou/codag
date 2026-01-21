@@ -10,7 +10,11 @@ import {
     FileMetadata,
     OAuthUser,
     DeviceCheckResponse,
-    AnalyzeResult
+    AnalyzeResult,
+    FileStructureContext,
+    MetadataBundle,
+    TokenUsage,
+    CostData
 } from './types';
 
 // Re-export types for backwards compatibility
@@ -24,7 +28,11 @@ export {
     FileMetadata,
     OAuthUser,
     DeviceCheckResponse,
-    AnalyzeResult
+    AnalyzeResult,
+    FileStructureContext,
+    MetadataBundle,
+    TokenUsage,
+    CostData
 };
 
 /**
@@ -143,20 +151,46 @@ export class APIClient {
      * Analyze workflow code.
      * Returns graph and remaining analyses count.
      * Throws TrialExhaustedError if trial quota is exhausted.
+     * @param condensedStructure Optional condensed repo structure for cross-batch context
      */
     async analyzeWorkflow(
         code: string,
         filePaths: string[],
         frameworkHint?: string,
-        metadata?: FileMetadata[]
+        metadata?: FileMetadata[],
+        condensedStructure?: string,
+        httpConnections?: string
     ): Promise<AnalyzeResult> {
         try {
+            // If condensed structure provided, prepend it to the code
+            let codeWithContext = code;
+            if (condensedStructure) {
+                codeWithContext = `<workflow_context>\n${condensedStructure}\n</workflow_context>\n\n${code}`;
+            }
+
+            // DEBUG: Log what we're sending to backend
+            console.log(`[DEBUG API] Sending to /analyze:`, {
+                filePaths,
+                codeLength: codeWithContext.length,
+                hasHttpConnections: !!httpConnections,
+                metadataCount: metadata?.length || 0
+            });
+
             const res = await this.client.post('/analyze', {
-                code,
+                code: codeWithContext,
                 file_paths: filePaths,
                 framework_hint: frameworkHint,
-                metadata: metadata || []
+                metadata: metadata || [],
+                http_connections: httpConnections
             });
+
+            // DEBUG: Log what we received
+            const nodeCount = res.data.graph?.nodes?.length || 0;
+            const edgeCount = res.data.graph?.edges?.length || 0;
+            console.log(`[DEBUG API] Response from /analyze: ${nodeCount} nodes, ${edgeCount} edges`);
+            if (nodeCount === 0) {
+                console.log(`[DEBUG API] Empty response for files:`, filePaths);
+            }
 
             // Extract remaining analyses from response header
             const remainingHeader = res.headers['x-remaining-analyses'];
@@ -164,9 +198,12 @@ export class APIClient {
                 ? parseInt(remainingHeader, 10)
                 : -1; // -1 means unlimited (authenticated)
 
+            // Backend now returns { graph, usage, cost }
             return {
-                graph: res.data,
-                remainingAnalyses: remaining
+                graph: res.data.graph,
+                remainingAnalyses: remaining,
+                usage: res.data.usage as TokenUsage | undefined,
+                cost: res.data.cost as CostData | undefined
             };
         } catch (error) {
             if (axios.isAxiosError(error)) {
@@ -191,5 +228,47 @@ export class APIClient {
     ): Promise<WorkflowGraph> {
         const result = await this.analyzeWorkflow(code, filePaths, frameworkHint, metadata);
         return result.graph;
+    }
+
+    /**
+     * Fetch metadata (labels, descriptions) for functions.
+     * Lightweight endpoint for incremental updates - only needs structure, not full analysis.
+     */
+    async analyzeMetadataOnly(
+        files: FileStructureContext[],
+        code?: string
+    ): Promise<{
+        files: MetadataBundle['files'];
+        usage?: TokenUsage;
+        cost?: CostData;
+    }> {
+        const res = await this.client.post('/analyze/metadata-only', {
+            files,
+            code
+        });
+        return {
+            files: res.data.files,
+            usage: res.data.usage as TokenUsage | undefined,
+            cost: res.data.cost as CostData | undefined
+        };
+    }
+
+    /**
+     * Condense raw repo structure into workflow-relevant summary.
+     * Uses LLM to filter out irrelevant files and identify workflow entry points.
+     */
+    async condenseStructure(rawStructure: string): Promise<{
+        condensed_structure: string;
+        usage?: TokenUsage;
+        cost?: CostData;
+    }> {
+        const res = await this.client.post('/condense-structure', {
+            raw_structure: rawStructure
+        });
+        return {
+            condensed_structure: res.data.condensed_structure,
+            usage: res.data.usage as TokenUsage | undefined,
+            cost: res.data.cost as CostData | undefined
+        };
     }
 }

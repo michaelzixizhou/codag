@@ -21,7 +21,7 @@ export function updateGroupVisibility(): void {
  * Update visibility when components are expanded/collapsed.
  * This requires a full re-layout since component expansion changes node positions.
  */
-export function updateComponentVisibility(): void {
+export async function updateComponentVisibility(): Promise<void> {
     const { g, svg } = state;
 
     // Remove existing rendered elements (except SVG defs)
@@ -37,7 +37,7 @@ export function updateComponentVisibility(): void {
     const defs = svg.select('defs');
 
     // Re-layout with new component state
-    layoutWorkflows(defs);
+    await layoutWorkflows(defs);
 
     // Re-render everything
     renderGroups();

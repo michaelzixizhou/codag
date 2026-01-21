@@ -1,8 +1,9 @@
 // HUD controls, zoom, and button tooltips
 import * as state from './state';
-import { getNodeWorkflowCount, generateEdgePath, getNodeOrCollapsedGroup, getVirtualNodeId } from './utils';
+import { getNodeWorkflowCount, getNodeOrCollapsedGroup, getVirtualNodeId } from './utils';
 import { renderMinimap } from './minimap';
-import { getNodeDimensions, positionTooltipNearMouse } from './helpers';
+import { positionTooltipNearMouse } from './helpers';
+import { updateEdgeLabels, getElkEdgePath } from './edges';
 import {
     NODE_WIDTH, NODE_HEIGHT, NODE_HALF_WIDTH,
     GROUP_BOUNDS_PADDING_X, GROUP_BOUNDS_PADDING_TOP, GROUP_BOUNDS_PADDING_BOTTOM,
@@ -25,7 +26,6 @@ export function setupControls(): void {
 }
 
 function openAnalyzePanel(): void {
-    console.log('openAnalyzePanel button clicked');
     state.vscode.postMessage({ command: 'openAnalyzePanel' });
 }
 
@@ -119,7 +119,7 @@ export function fitToScreen(): void {
 export function formatGraph(): void {
     const { svg, currentGraphData, workflowGroups, originalPositions } = state;
 
-    // Reset all nodes to their original dagre-computed positions
+    // Reset all nodes to their original ELK-computed positions
     currentGraphData.nodes.forEach((node: any) => {
         const orig = originalPositions.get(node.id);
         if (orig) {
@@ -144,10 +144,20 @@ export function formatGraph(): void {
         }
     });
 
-    // Recalculate group bounds (including shared nodes)
+    // Restore group bounds from layout (don't recalculate)
+    // This ensures consistent spacing as calculated by the layout algorithm
     workflowGroups.forEach((group: any) => {
         if (group.nodes.length < 3) return;
 
+        // Use stored layout bounds if available (set during layoutWorkflows)
+        if (group._layoutBounds) {
+            group.bounds = { ...group._layoutBounds };
+            group.centerX = (group.bounds.minX + group.bounds.maxX) / 2;
+            group.centerY = (group.bounds.minY + group.bounds.maxY) / 2;
+            return;
+        }
+
+        // Fallback: recalculate from node positions (for backwards compatibility)
         // Get ALL nodes in this workflow (including shared)
         const allGroupNodes = currentGraphData.nodes.filter((n: any) =>
             group.nodes.includes(n.id)
@@ -182,22 +192,21 @@ export function formatGraph(): void {
         const topEdges = nodesWithBounds.map(n => n.y - n.height / 2);
         const bottomEdges = nodesWithBounds.map(n => n.y + n.height / 2);
 
+        // Round to integers to avoid sub-pixel jitter
         group.bounds = {
-            minX: Math.min(...leftEdges) - GROUP_BOUNDS_PADDING_X,
-            maxX: Math.max(...rightEdges) + GROUP_BOUNDS_PADDING_X,
-            minY: Math.min(...topEdges) - GROUP_BOUNDS_PADDING_TOP,
-            maxY: Math.max(...bottomEdges) + GROUP_BOUNDS_PADDING_BOTTOM
+            minX: Math.round(Math.min(...leftEdges) - GROUP_BOUNDS_PADDING_X),
+            maxX: Math.round(Math.max(...rightEdges) + GROUP_BOUNDS_PADDING_X),
+            minY: Math.round(Math.min(...topEdges) - GROUP_BOUNDS_PADDING_TOP),
+            maxY: Math.round(Math.max(...bottomEdges) + GROUP_BOUNDS_PADDING_BOTTOM)
         };
 
-        group.centerX = (group.bounds.minX + group.bounds.maxX) / 2;
-        group.centerY = (group.bounds.minY + group.bounds.maxY) / 2;
+        group.centerX = Math.round((group.bounds.minX + group.bounds.maxX) / 2);
+        group.centerY = Math.round((group.bounds.minY + group.bounds.maxY) / 2);
     });
 
-    // Update DOM with transitions
+    // Update DOM instantly (no transitions)
     svg.selectAll('.group-background')
         .filter((d: any) => d.bounds && !isNaN(d.bounds.minX))
-        .transition()
-        .duration(TRANSITION_NORMAL)
         .attr('x', (d: any) => d.bounds.minX)
         .attr('y', (d: any) => d.bounds.minY)
         .attr('width', (d: any) => d.bounds.maxX - d.bounds.minX)
@@ -205,62 +214,24 @@ export function formatGraph(): void {
 
     svg.selectAll('.group-title-expanded')
         .filter((d: any) => d.bounds && !isNaN(d.bounds.minX))
-        .transition()
-        .duration(TRANSITION_NORMAL)
         .attr('x', (d: any) => d.bounds.minX)
         .attr('y', (d: any) => d.bounds.minY - 8);
 
-    // Update nodes
+    // Update nodes instantly (no transitions)
     svg.selectAll('.node')
         .filter((d: any) => !isNaN(d.x) && !isNaN(d.y))
-        .transition()
-        .duration(TRANSITION_NORMAL)
         .attr('transform', (d: any) => `translate(${d.x},${d.y})`);
 
-    // Update edges
-    const getNode = (nodeId: string) => {
-        // Check if this is a component placeholder
-        if (nodeId.startsWith('__comp_')) {
-            const compId = nodeId.replace('__comp_', '');
-            for (const group of workflowGroups) {
-                for (const comp of (group.components || [])) {
-                    if (comp.id === compId && comp.centerX !== undefined && comp.centerY !== undefined) {
-                        return {
-                            id: nodeId,
-                            x: comp.centerX,
-                            y: comp.centerY,
-                            width: 100,
-                            height: 60
-                        };
-                    }
-                }
-            }
-        }
-        // Check expandedNodes first (for virtual IDs of shared nodes)
-        const expanded = state.expandedNodes.find((n: any) => n.id === nodeId);
-        if (expanded) return expanded;
-        // Fallback to original nodes or collapsed groups
-        return getNodeOrCollapsedGroup(nodeId, currentGraphData.nodes, workflowGroups);
-    };
+    // Update edges instantly (no transitions)
+    svg.selectAll('.link')
+        .attr('d', (l: any) => getElkEdgePath(l, workflowGroups));
 
-    svg.selectAll('.link').transition().duration(TRANSITION_NORMAL)
-        .attr('d', function(l: any) {
-            const sourceNode = getNode(l.source);
-            const targetNode = getNode(l.target);
-            const { width: targetWidth, height: targetHeight } = getNodeDimensions(targetNode);
-            const { width: sourceWidth, height: sourceHeight } = getNodeDimensions(sourceNode);
-            return generateEdgePath(l, sourceNode, targetNode, workflowGroups, targetWidth, targetHeight, sourceWidth, sourceHeight, currentGraphData.edges);
-        });
-
-    svg.selectAll('.link-hover').transition().duration(TRANSITION_NORMAL)
-        .attr('d', function(l: any) {
-            const sourceNode = getNode(l.source);
-            const targetNode = getNode(l.target);
-            const { width: targetWidth, height: targetHeight } = getNodeDimensions(targetNode);
-            const { width: sourceWidth, height: sourceHeight } = getNodeDimensions(sourceNode);
-            return generateEdgePath(l, sourceNode, targetNode, workflowGroups, targetWidth, targetHeight, sourceWidth, sourceHeight, currentGraphData.edges);
-        });
+    svg.selectAll('.link-hover')
+        .attr('d', (l: any) => getElkEdgePath(l, workflowGroups));
 
     // Update minimap
     renderMinimap();
+
+    // Update edge labels instantly (no transitions)
+    updateEdgeLabels(0);
 }

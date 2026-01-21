@@ -1,7 +1,13 @@
 // Type declarations for webview globals
 declare const d3: any;
-declare const dagre: any;
 declare function acquireVsCodeApi(): any;
+
+// ELK edge routing data
+export interface EdgeRoute {
+    startPoint: { x: number; y: number };
+    endPoint: { x: number; y: number };
+    bendPoints: { x: number; y: number }[];
+}
 
 interface Window {
     __GRAPH_DATA__: any;
@@ -24,24 +30,29 @@ export { SourceLocation } from '../types';
 export interface WorkflowNode {
     id: string;
     label: string;
-    type: 'trigger' | 'llm' | 'tool' | 'decision' | 'integration' | 'memory' | 'parser' | 'output';
+    type: 'step' | 'llm' | 'decision' | string;  // 3 main types, string for backward compat
     description?: string;
     source?: SourceLocation;
-    model?: string;  // For LLM nodes: the model name (e.g., "gpt-4", "gemini-2.5-flash")
-    isEntryPoint?: boolean;
-    isExitPoint?: boolean;
+    model?: string;  // For LLM nodes: the model name
+    temperature?: number;
     x?: number;
     y?: number;
     fx?: number;
     fy?: number;
 }
 
+export interface EdgePayload {
+    name: string;
+    type: string;
+    description: string;
+}
+
 export interface WorkflowEdge {
     source: string;
     target: string;
-    label?: string;
-    dataType?: string;
-    description?: string;
+    label?: string;           // Descriptive (only for decisions/API calls)
+    payload?: EdgePayload;    // Data contract
+    condition?: string;       // For decision branches
     sourceLocation?: SourceLocation;
 }
 

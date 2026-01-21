@@ -1,5 +1,5 @@
 // Shared mutable state for webview client
-import { WorkflowGraph, WorkflowGroup, WorkflowComponent, NodePosition } from './types';
+import { WorkflowGraph, WorkflowGroup, WorkflowComponent, NodePosition, EdgeRoute } from './types';
 
 // VSCode API instance
 export let vscode: any = null;
@@ -43,9 +43,15 @@ export let collapsedGroups: any = null;
 export let groupElements: any = null;
 export let edgePathsContainer: any = null;
 export let sharedArrowsContainer: any = null;
+export let edgeLabelsContainer: any = null;
+export let edgeLabelGroups: any = null;
+export let edgesWithLabels: any[] = [];
 
 // Expanded nodes (including virtual copies with positions)
 export let expandedNodes: any[] = [];
+
+// ELK edge routes: edgeId -> EdgeRoute
+export let elkEdgeRoutes: Map<string, EdgeRoute> = new Map();
 
 // Containers
 export let groupContainer: any = null;
@@ -169,6 +175,13 @@ export function setSharedArrowsContainer(container: any): void {
     sharedArrowsContainer = container;
 }
 
+// Set edge labels state
+export function setEdgeLabelsState(container: any, groups: any, edges: any[]): void {
+    edgeLabelsContainer = container;
+    edgeLabelGroups = groups;
+    edgesWithLabels = edges;
+}
+
 // Set expanded nodes
 export function setExpandedNodes(nodes: any[]): void {
     expandedNodes = nodes;
@@ -201,4 +214,14 @@ export function getExpandedComponents(): Set<string> {
 
 export function setExpandedComponents(components: Set<string>): void {
     expandedComponents = components;
+}
+
+// Set ELK edge routes
+export function setElkEdgeRoutes(routes: Map<string, EdgeRoute>): void {
+    elkEdgeRoutes = routes;
+}
+
+// Get ELK edge route for an edge
+export function getElkEdgeRoute(edgeId: string): EdgeRoute | undefined {
+    return elkEdgeRoutes.get(edgeId);
 }

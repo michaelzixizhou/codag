@@ -104,16 +104,11 @@ In the extension development window:
 
 ## Workflow Components
 
-The system identifies 8 node types:
+The system identifies 3 node types:
 
-- **Triggers** (orange): Entry points (API endpoints, main functions)
-- **LLM Calls** (blue): LLM API invocations
-- **Tools** (green): Functions callable by LLMs
-- **Decisions** (purple): Conditional logic on LLM output
-- **Integrations** (red-orange): External APIs, databases
-- **Memory** (teal): State/conversation storage
-- **Parsers** (brown): Data transformation, formatting
-- **Output** (gray): Return statements, responses
+- **Step** (rectangle): Any processing - API endpoints, functions, parsing, formatting, database calls, returns
+- **LLM** (stadium shape): LLM/AI API calls only (.chat.completions, .generate_content, etc.)
+- **Decision** (diamond): Explicit if/else or switch/match branching (must have 2+ labeled outgoing edges)
 
 ### Special Indicators
 
@@ -136,10 +131,9 @@ The system identifies 8 node types:
 
 **Key Design Decisions:**
 - **AST-aware caching**: Only hashes LLM-relevant code (ignores comments/whitespace)
-- **Workspace-level caching**: Preserves cross-file edges in batch analysis
-- **Deterministic file ordering**: Sorts files by path before hashing for consistent cache hits
+- **Per-file caching**: Each file cached independently; only changed files reanalyzed
+- **Cross-batch structure preservation**: Tree-sitter pre-parse enables cross-file edges even when files are in different LLM batches
 - **Separated SVG layers**: Edge paths render beneath all edge labels
-- **Critical path validation**: Enforces singular linear path from entry to exit
 - **Workflow connectivity**: All nodes in workflow must be reachable via edges
 
 **Authentication:**
@@ -177,9 +171,11 @@ python main.py  # Runs on http://localhost:8000
 - `webview/styles.ts` - All CSS styling including node types and hover effects
 - `webview/icons.ts` - SVG icons for each node type
 - `analyzer.ts` - Client-side LLM detection patterns
-- `cache.ts` - Workspace-level caching with AST-aware hashing
+- `cache.ts` - Per-file caching with AST-aware hashing
 - `static-analyzer.ts` - TypeScript/Python AST parsing for content hashing
 - `metadata-builder.ts` - File dependency analysis and batching
+- `repo-structure-extractor.ts` - Pre-parses all files for cross-batch context
+- `cross-batch-merger.ts` - Resolves placeholder nodes after batches complete
 
 ## Adding LLM Providers
 

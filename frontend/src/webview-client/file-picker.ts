@@ -110,7 +110,6 @@ export interface FileTreeNode {
     isDirectory: boolean;
     depth: number;
     selected: boolean;
-    hasLLMCalls: boolean | null;  // null = unknown, true = confirmed, false = none
     children: FileTreeNode[];
 }
 
@@ -126,7 +125,6 @@ export class FilePicker {
     private selectedPaths: Set<string> = new Set();
     private collapsedPaths: Set<string> = new Set();
     private resolvePromise: ((paths: string[] | null) => void) | null = null;
-    private llmDetectionComplete: boolean = false;
 
     constructor() {}
 
@@ -137,7 +135,6 @@ export class FilePicker {
         this.tree = data.tree;
         this.totalFiles = data.totalFiles;
         this.selectedPaths.clear();
-        this.llmDetectionComplete = false;
 
         // Initialize selected paths from tree
         this.collectSelectedPaths(this.tree);
@@ -162,41 +159,6 @@ export class FilePicker {
     }
 
     /**
-     * Toggle LLM files in selection (additive/subtractive)
-     */
-    private toggleLLMFiles(shouldSelect: boolean) {
-        const llmPaths = this.collectLLMPaths(this.tree!);
-        if (shouldSelect) {
-            llmPaths.forEach(p => this.selectedPaths.add(p));
-        } else {
-            llmPaths.forEach(p => this.selectedPaths.delete(p));
-        }
-        this.refreshTree();
-    }
-
-    /**
-     * Collect paths of files with LLM calls
-     */
-    private collectLLMPaths(node: FileTreeNode): string[] {
-        const paths: string[] = [];
-        if (!node.isDirectory && node.hasLLMCalls === true) {
-            paths.push(node.path);
-        }
-        for (const child of node.children) {
-            paths.push(...this.collectLLMPaths(child));
-        }
-        return paths;
-    }
-
-    /**
-     * Check if all LLM files are selected
-     */
-    private areAllLLMFilesSelected(): boolean {
-        const llmPaths = this.collectLLMPaths(this.tree!);
-        return llmPaths.length > 0 && llmPaths.every(p => this.selectedPaths.has(p));
-    }
-
-    /**
      * Render the modal
      */
     private render() {
@@ -209,17 +171,13 @@ export class FilePicker {
             <div class="file-picker-modal">
                 <div class="file-picker-header">
                     <h2>Codebase Analysis</h2>
-                    <p>Select files to analyze. Files marked <span class="llm-badge-inline">LLM</span> have a high confidence to be related to LLM workflows.</p>
+                    <p>Select files to analyze.</p>
                 </div>
                 <div class="file-picker-toolbar">
                     <div class="file-picker-toggles">
                         <button class="toggle-btn" id="select-all-btn">
                             <input type="checkbox" id="select-all-checkbox" />
                             <span>Select All</span>
-                        </button>
-                        <button class="toggle-btn detecting" id="select-llm-btn" disabled>
-                            <input type="checkbox" id="select-llm-checkbox" disabled />
-                            <span class="llm-badge">LLM</span>
                         </button>
                     </div>
                     <div class="file-picker-search">
@@ -290,11 +248,6 @@ export class FilePicker {
             }
         } else {
             classes.push('is-file');
-            if (node.hasLLMCalls === true) {
-                classes.push('has-llm-calls');
-            } else if (node.hasLLMCalls === false) {
-                classes.push('no-llm-calls');
-            }
         }
         if (isHidden) {
             classes.push('collapsed-child');
@@ -309,9 +262,6 @@ export class FilePicker {
             : '<span class="dir-toggle-spacer"></span>';
 
         const icon = getFileIcon(node.name, node.isDirectory, isCollapsed);
-        const llmBadge = !node.isDirectory && node.hasLLMCalls === true
-            ? '<span class="llm-badge">LLM</span>'
-            : '';
 
         // Generate vertical lines for ancestor levels that have more siblings
         const ancestorLines = continuingLines.map((hasSibling, idx) =>
@@ -333,7 +283,6 @@ export class FilePicker {
                 </label>
                 <span class="item-icon">${icon}</span>
                 <span class="item-name">${node.name}</span>
-                ${llmBadge}
             </div>
         `;
 
@@ -440,16 +389,6 @@ export class FilePicker {
                 this.selectedPaths.clear();
             }
             this.refreshTree();
-        });
-
-        // Select LLM files button click (toggle)
-        const selectLLMBtn = this.modal.querySelector('#select-llm-btn') as HTMLButtonElement;
-        const selectLLMCheckbox = this.modal.querySelector('#select-llm-checkbox') as HTMLInputElement;
-        selectLLMBtn?.addEventListener('click', () => {
-            if (!this.llmDetectionComplete) return;
-            const shouldCheck = !this.areAllLLMFilesSelected();
-            selectLLMCheckbox.checked = shouldCheck;
-            this.toggleLLMFiles(shouldCheck);
         });
 
         // Delete Cache & Reanalyze button
@@ -567,16 +506,6 @@ export class FilePicker {
             selectAllCheckbox.checked = allSelected;
             selectAllCheckbox.indeterminate = someSelected;
         }
-
-        // Also update LLM checkbox
-        const selectLLMCheckbox = this.modal?.querySelector('#select-llm-checkbox') as HTMLInputElement;
-        if (selectLLMCheckbox) {
-            const llmPaths = this.collectLLMPaths(this.tree!);
-            const allLLMSelected = llmPaths.length > 0 && llmPaths.every(p => this.selectedPaths.has(p));
-            const someLLMSelected = llmPaths.some(p => this.selectedPaths.has(p)) && !allLLMSelected;
-            selectLLMCheckbox.checked = allLLMSelected;
-            selectLLMCheckbox.indeterminate = someLLMSelected;
-        }
     }
 
     /**
@@ -677,48 +606,6 @@ export class FilePicker {
         this.modal = null;
     }
 
-    /**
-     * Update file picker with LLM detection results (called after picker is shown)
-     */
-    updateLLMFiles(llmFilePaths: string[]) {
-        if (!this.modal || !this.tree) return;
-
-        const llmSet = new Set(llmFilePaths);
-
-        // Update tree data with LLM status
-        this.updateTreeLLMStatus(this.tree, llmSet);
-
-        // Update selection to only include LLM files
-        this.selectedPaths.clear();
-        llmFilePaths.forEach(p => this.selectedPaths.add(p));
-
-        // Mark detection complete and enable LLM button
-        this.llmDetectionComplete = true;
-        const selectLLMBtn = this.modal.querySelector('#select-llm-btn') as HTMLButtonElement;
-        const selectLLMCheckbox = this.modal.querySelector('#select-llm-checkbox') as HTMLInputElement;
-        if (selectLLMBtn) {
-            selectLLMBtn.disabled = false;
-            selectLLMBtn.classList.remove('detecting');
-        }
-        if (selectLLMCheckbox) {
-            selectLLMCheckbox.disabled = false;
-        }
-
-        // Refresh the tree to reflect changes
-        this.refreshTree();
-    }
-
-    /**
-     * Recursively update tree nodes with LLM status
-     */
-    private updateTreeLLMStatus(node: FileTreeNode, llmSet: Set<string>) {
-        if (!node.isDirectory) {
-            node.hasLLMCalls = llmSet.has(node.path);
-        }
-        for (const child of node.children) {
-            this.updateTreeLLMStatus(child, llmSet);
-        }
-    }
 }
 
 // Singleton instance

@@ -76,8 +76,6 @@ function nodeChanged(oldNode: WorkflowNode, newNode: WorkflowNode): boolean {
     return oldNode.label !== newNode.label ||
            oldNode.type !== newNode.type ||
            oldNode.description !== newNode.description ||
-           oldNode.isEntryPoint !== newNode.isEntryPoint ||
-           oldNode.isExitPoint !== newNode.isExitPoint ||
            JSON.stringify(oldNode.source) !== JSON.stringify(newNode.source);
 }
 

@@ -100,13 +100,7 @@ export class WorkflowMetadataProvider {
     const visibleWorkflows = filterVisibleWorkflows(graph);
     const workflows: WorkflowInfo[] = visibleWorkflows.map(wf => ({
       name: wf.name,
-      nodeIds: wf.nodeIds || [],
-      entryPoints: graph.nodes
-        .filter(n => n.isEntryPoint && wf.nodeIds.includes(n.id))
-        .map(n => n.id),
-      exitPoints: graph.nodes
-        .filter(n => n.isExitPoint && wf.nodeIds.includes(n.id))
-        .map(n => n.id)
+      nodeIds: wf.nodeIds || []
     }));
 
     // Extract cross-file edges

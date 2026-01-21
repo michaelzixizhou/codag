@@ -97,6 +97,20 @@ export class WebviewManager {
         });
     }
 
+    /**
+     * Notify webview of file state changes for live file indicators
+     */
+    notifyFileStateChange(changes: Array<{
+        filePath: string;
+        functions?: string[];  // Specific functions that changed (matches node.source.function)
+        state: 'active' | 'changed' | 'unchanged'
+    }>) {
+        this.postMessage({
+            command: 'fileStateChange',
+            changes
+        });
+    }
+
     private setupMessageHandlers() {
         if (!this.panel) return;
 
@@ -300,16 +314,6 @@ export class WebviewManager {
         });
     }
 
-    /**
-     * Update file picker with LLM detection results (called after picker is shown)
-     */
-    updateFilePickerLLM(llmFilePaths: string[]) {
-        this.postMessage({
-            command: 'updateFilePickerLLM',
-            llmFiles: llmFilePaths
-        });
-    }
-
     showLoading(message: string) {
         if (!this.panel) {
             this.panel = vscode.window.createWebviewPanel(
@@ -389,6 +393,18 @@ export class WebviewManager {
             this.panel.reveal();
             this.postMessage({ command: 'focusWorkflow', workflowName });
         }
+    }
+
+    /**
+     * Send label hydration updates from metadata batch
+     */
+    hydrateLabels(filePath: string, labels: Record<string, string>, descriptions: Record<string, string>) {
+        this.postMessage({
+            command: 'hydrateLabels',
+            filePath,
+            labels,
+            descriptions
+        });
     }
 
     show(graph: WorkflowGraph, loadingOptions?: LoadingOptions) {

@@ -1,11 +1,31 @@
 // Minimap rendering
 import * as state from './state';
+import { EdgeRoute } from './types';
 import {
     NODE_WIDTH, NODE_HEIGHT, NODE_HALF_WIDTH, NODE_HALF_HEIGHT,
     TRANSITION_FAST, MINIMAP_PADDING
 } from './constants';
 
 declare const d3: any;
+
+/**
+ * Generate minimap-scaled SVG path from ELK edge route
+ */
+function generateMinimapEdgePath(
+    route: EdgeRoute,
+    toMinimapX: (x: number) => number,
+    toMinimapY: (y: number) => number
+): string {
+    const { startPoint, endPoint, bendPoints } = route;
+
+    let path = `M ${toMinimapX(startPoint.x)} ${toMinimapY(startPoint.y)}`;
+    for (const bp of bendPoints) {
+        path += ` L ${toMinimapX(bp.x)} ${toMinimapY(bp.y)}`;
+    }
+    path += ` L ${toMinimapX(endPoint.x)} ${toMinimapY(endPoint.y)}`;
+
+    return path;
+}
 
 export function renderMinimap(): void {
     const { currentGraphData, workflowGroups, svg, zoom } = state;
@@ -79,23 +99,51 @@ export function renderMinimap(): void {
         }
     });
 
-    // Render edges
-    currentGraphData.edges.forEach((edge: any) => {
-        const sourceNode = currentGraphData.nodes.find((n: any) => n.id === edge.source);
-        const targetNode = currentGraphData.nodes.find((n: any) => n.id === edge.target);
-
-        if (sourceNode && targetNode &&
-            !isNaN(sourceNode.x) && !isNaN(sourceNode.y) &&
-            !isNaN(targetNode.x) && !isNaN(targetNode.y)) {
-            minimapG.append('line')
-                .attr('class', 'minimap-edge')
-                .attr('data-source', edge.source)
-                .attr('data-target', edge.target)
-                .attr('x1', toMinimapX(sourceNode.x))
-                .attr('y1', toMinimapY(sourceNode.y))
-                .attr('x2', toMinimapX(targetNode.x))
-                .attr('y2', toMinimapY(targetNode.y));
+    // Collect LLM node positions for checking edge endpoints
+    const llmNodePositions = new Map<string, { x: number; y: number }>();
+    currentGraphData.nodes.forEach((node: any) => {
+        if (node.type === 'llm' && !isNaN(node.x) && !isNaN(node.y)) {
+            llmNodePositions.set(node.id, { x: node.x, y: node.y });
         }
+    });
+
+    // Collect edge endpoint positions that need connector dots
+    const connectorDots: Array<{ x: number; y: number; isStart: boolean }> = [];
+
+    // Render edges using actual ELK routes
+    state.elkEdgeRoutes.forEach((route: EdgeRoute, edgeId: string) => {
+        const path = generateMinimapEdgePath(route, toMinimapX, toMinimapY);
+        if (path) {
+            minimapG.append('path')
+                .attr('class', 'minimap-edge')
+                .attr('data-edge-id', edgeId)
+                .attr('d', path);
+
+            // Check if endpoints need connector dots (not at LLM nodes)
+            const edge = currentGraphData.edges.find((e: any) => e.id === edgeId);
+            if (edge) {
+                const sourceNode = currentGraphData.nodes.find((n: any) => n.id === edge.source);
+                const targetNode = currentGraphData.nodes.find((n: any) => n.id === edge.target);
+
+                // Add dot at start if source is not an LLM node
+                if (sourceNode && sourceNode.type !== 'llm') {
+                    connectorDots.push({ x: route.startPoint.x, y: route.startPoint.y, isStart: true });
+                }
+                // Add dot at end if target is not an LLM node
+                if (targetNode && targetNode.type !== 'llm') {
+                    connectorDots.push({ x: route.endPoint.x, y: route.endPoint.y, isStart: false });
+                }
+            }
+        }
+    });
+
+    // Render connector dots at edge endpoints (for non-LLM connections)
+    connectorDots.forEach(dot => {
+        minimapG.append('circle')
+            .attr('class', 'minimap-connector')
+            .attr('cx', toMinimapX(dot.x))
+            .attr('cy', toMinimapY(dot.y))
+            .attr('r', 1.5);
     });
 
     // Render only LLM nodes

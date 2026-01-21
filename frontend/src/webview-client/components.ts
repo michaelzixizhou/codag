@@ -4,7 +4,7 @@ import { COMPONENT_CORNER_CUT, DRAG_THRESHOLD, COMPONENT_PADDING } from './const
 import { WorkflowComponent } from './types';
 import { measureTextWidth } from './groups';
 import { snapToGrid } from './utils';
-import { updateEdgePaths } from './edges';
+import { updateEdgePaths, updateEdgeLabels } from './edges';
 import { renderMinimap } from './minimap';
 
 declare const d3: any;
@@ -86,14 +86,14 @@ export function renderCollapsedComponents(onToggle: () => void): void {
         d.centerX = newX;
         d.centerY = newY;
 
-        // Update bounds based on new center
+        // Update bounds based on new center (round to avoid sub-pixel jitter)
         const w = (d as any).visualWidth || 100;
         const h = (d as any).visualHeight || 52;
         d.bounds = {
-            minX: newX - w / 2 - COMPONENT_PADDING,
-            maxX: newX + w / 2 + COMPONENT_PADDING,
-            minY: newY - h / 2 - COMPONENT_PADDING,
-            maxY: newY + h / 2 + COMPONENT_PADDING
+            minX: Math.round(newX - w / 2 - COMPONENT_PADDING),
+            maxX: Math.round(newX + w / 2 + COMPONENT_PADDING),
+            minY: Math.round(newY - h / 2 - COMPONENT_PADDING),
+            maxY: Math.round(newY + h / 2 + COMPONENT_PADDING)
         };
 
         // Update visual elements
@@ -107,8 +107,9 @@ export function renderCollapsedComponents(onToggle: () => void): void {
             .attr('x', newX)
             .attr('y', newY + 12);
 
-        // Update connected edges
+        // Update connected edges and labels
         updateEdgePaths();
+        updateEdgeLabels();
     };
 
     const componentDragEnded = (event: any, d: WorkflowComponent) => {
