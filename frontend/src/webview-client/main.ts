@@ -16,6 +16,8 @@ import { updateGroupVisibility, updateComponentVisibility } from './visibility';
 import { detectWorkflowGroups, updateSnapshotStats } from './workflow-detection';
 import { setupDirectory } from './directory';
 import { setupAuthHandlers } from './auth';
+import { notifications } from './notifications';
+import { initTutorial } from './tutorial';
 
 declare const d3: any;
 declare function acquireVsCodeApi(): any;
@@ -24,6 +26,9 @@ declare function acquireVsCodeApi(): any;
 (async function init() {
     // Get VSCode API
     const vscode = acquireVsCodeApi();
+
+    // Initialize notification queue
+    notifications.init('notificationQueue');
 
     // Get graph data from window
     const graphData = (window as any).__GRAPH_DATA__;
@@ -67,24 +72,16 @@ declare function acquireVsCodeApi(): any;
     // Setup auth handlers (trial tag, sign-up button, auth panel)
     setupAuthHandlers();
 
+    // Setup onboarding tutorial (shows on first launch)
+    initTutorial();
+
     // Setup message handler
     setupMessageHandler();
 
-    // Show loading indicator if analysis is in progress
+    // Show loading notification if analysis is in progress
     const loadingState = (window as any).__LOADING_STATE__;
     if (loadingState) {
-        const indicator = document.getElementById('loadingIndicator');
-        if (indicator) {
-            const iconSpan = indicator.querySelector('.loading-icon') as HTMLElement;
-            const textSpan = indicator.querySelector('.loading-text') as HTMLElement;
-            if (iconSpan) {
-                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
-            }
-            if (textSpan) {
-                textSpan.textContent = 'Analyzing...';
-            }
-            indicator.style.display = 'block';
-        }
+        notifications.show({ type: 'loading', message: 'Analyzing...' });
     }
 
     // Signal extension that webview is ready to receive messages

@@ -36,10 +36,10 @@ export async function analyzeAndUpdateSingleFile(
     const { api, auth, cache, webview, log } = ctx;
 
     try {
-        const filePath = uri.fsPath;
+        const filePath = vscode.workspace.asRelativePath(uri, false);
         const startTime = Date.now();
         log(`\n=== Incremental File Analysis ===`);
-        log(`File: ${vscode.workspace.asRelativePath(filePath)}`);
+        log(`File: ${filePath}`);
 
         // Read file content
         const document = await vscode.workspace.openTextDocument(uri);

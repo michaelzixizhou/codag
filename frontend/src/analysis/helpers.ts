@@ -25,17 +25,11 @@ export function withHttpEdges(
     // Add HTTP connection edges (client → backend handler)
     if (httpConnections.length > 0) {
         const httpResult = addHttpConnectionEdges(result, httpConnections, log);
-        if (httpResult.addedEdges > 0 || httpResult.addedNodes > 0) {
-            log(`[HTTP] Added ${httpResult.addedEdges} edges, ${httpResult.addedNodes} nodes`);
-        }
         result = httpResult.graph;
 
         // Add HTTP caller edges (frontend caller → client)
         if (repoFiles.length > 0) {
             const callerResult = addHttpCallerEdges(result, httpConnections, repoFiles, log);
-            if (callerResult.addedEdges > 0 || callerResult.addedNodes > 0) {
-                log(`[HTTP-CALLERS] Added ${callerResult.addedNodes} nodes, ${callerResult.addedEdges} edges`);
-            }
             result = callerResult.graph;
         }
     }
@@ -43,9 +37,6 @@ export function withHttpEdges(
     // Add cross-file call edges
     if (crossFileCalls.length > 0) {
         const callResult = addCrossFileCallEdges(result, crossFileCalls, log);
-        if (callResult.addedEdges > 0) {
-            log(`[CROSS-FILE] Added ${callResult.addedEdges} edges`);
-        }
         result = callResult.graph;
     }
 

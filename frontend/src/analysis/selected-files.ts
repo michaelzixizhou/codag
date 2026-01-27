@@ -54,13 +54,13 @@ export async function analyzeSelectedFiles(
     try {
         webview.showLoading('Analyzing selected files...');
 
-        // Read file contents
+        // Read file contents (store relative paths for cache consistency)
         const fileContents: { path: string; content: string }[] = [];
         for (const filePath of selectedPaths) {
             try {
                 const content = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
                 fileContents.push({
-                    path: filePath,
+                    path: vscode.workspace.asRelativePath(filePath, false),
                     content: Buffer.from(content).toString('utf8')
                 });
             } catch (error) {
@@ -92,8 +92,13 @@ export async function analyzeSelectedFiles(
             log(`Found ${getCrossFileCalls().length} cross-file call(s)`);
         }
 
-        // Build metadata
-        const uncachedUris = fileContents.map(f => vscode.Uri.file(f.path));
+        // Build metadata (convert relative paths back to Uris)
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            log('No workspace folder found');
+            return;
+        }
+        const uncachedUris = fileContents.map(f => vscode.Uri.joinPath(workspaceFolder.uri, f.path));
         const metadata = await metadataBuilder.buildMetadata(uncachedUris);
 
         // Detect framework/services
@@ -116,7 +121,7 @@ export async function analyzeSelectedFiles(
         log(`Created ${batches.length} batch${batches.length > 1 ? 'es' : ''} for ${fileContents.length} files`);
 
         webview.notifyAnalysisStarted();
-        webview.updateProgress(0, batches.length);
+        webview.startBatchProgress(batches.length);
 
         const maxConcurrency = CONFIG.CONCURRENCY.MAX_PARALLEL;
         const newGraphs: any[] = [];
@@ -130,7 +135,7 @@ export async function analyzeSelectedFiles(
             const batchPromises = batchSlice.map(async (batch, sliceIndex) => {
                 const batchIndex = i + sliceIndex;
                 const batchMetadata = metadata.filter(m =>
-                    batch.some(f => f.path === m.file)
+                    batch.some(f => f.path === vscode.workspace.asRelativePath(m.file, false))
                 );
                 const combinedCode = combineFilesXML(batch, batchMetadata);
                 const batchTokens = estimateTokens(combinedCode);
@@ -197,7 +202,7 @@ export async function analyzeSelectedFiles(
                         console.log(`[DEBUG] Batch ${batchIndex + 1} returned NO nodes. Files were:`, batch.map(f => f.path));
                     }
 
-                    webview.updateProgress(batchIndex + 1, batches.length);
+                    webview.batchCompleted(batch.length);
                     return graph;
                 } catch (error: any) {
                     log(`Batch ${batchIndex + 1} failed: ${error.message}`);

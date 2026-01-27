@@ -99,11 +99,16 @@ export function measureNodeDimensions(label: string, options?: NodeMeasureOption
         }
     }
 
+    // Re-measure at the final optimal width to get accurate height
+    // (binary search may leave wrappedDiv at a different width)
+    wrappedDiv.style('width', `${optimalWidth}px`);
+    const finalHeight = (wrappedDiv.node() as HTMLElement).offsetHeight;
+
     container.remove();
 
     return {
         width: Math.max(minWidth, optimalWidth + horizontalPadding),
-        height: wrappedHeight + verticalPadding
+        height: finalHeight + verticalPadding
     };
 }
 

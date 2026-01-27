@@ -581,6 +581,9 @@ function extractTypeScriptStructure(code: string, filePath: string): FileStructu
                 if (funcName) {
                     const funcNode = node.type === 'MethodDefinition' ? node.value :
                                      node.type === 'VariableDeclarator' ? node.init : node;
+
+                    // Save parent function context (for nested functions)
+                    const parentFunction = currentFunction;
                     currentFunction = { name: funcName, calls: [], hasLLMCall: false, httpCalls: [] };
 
                     // Walk function body
@@ -601,7 +604,8 @@ function extractTypeScriptStructure(code: string, filePath: string): FileStructu
                         exports.push(funcName);
                     }
 
-                    currentFunction = null;
+                    // Restore parent function context
+                    currentFunction = parentFunction;
                     return;
                 }
             }

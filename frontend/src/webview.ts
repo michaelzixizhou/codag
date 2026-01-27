@@ -23,6 +23,14 @@ export class WebviewManager {
     private pendingMessages: any[] = [];
     private webviewReady = false;
 
+    // Cumulative batch progress tracking
+    private batchState = {
+        completed: 0,
+        total: 0,
+        startTime: 0,
+        filesAnalyzed: 0
+    };
+
     constructor(private context: vscode.ExtensionContext) {}
 
     /**
@@ -83,10 +91,17 @@ export class WebviewManager {
     }
 
     notifyAnalysisComplete(success: boolean, error?: string) {
+        const stats = this.getBatchStats();
         this.postMessage({
             command: 'analysisComplete',
             success,
-            error
+            error,
+            // Include stats for success message
+            ...(success && stats.batchCount > 0 ? {
+                filesAnalyzed: stats.filesAnalyzed,
+                batchCount: stats.batchCount,
+                elapsed: stats.elapsed
+            } : {})
         });
     }
 
@@ -359,6 +374,51 @@ export class WebviewManager {
 
     updateProgress(current: number, total: number) {
         this.postMessage({ command: 'updateProgress', current, total });
+    }
+
+    /**
+     * Start tracking batch progress (resets counters).
+     */
+    startBatchProgress(total: number): void {
+        this.batchState = {
+            completed: 0,
+            total,
+            startTime: Date.now(),
+            filesAnalyzed: 0
+        };
+        this.postMessage({
+            command: 'batchProgress',
+            completed: 0,
+            total,
+            filesAnalyzed: 0,
+            elapsed: 0
+        });
+    }
+
+    /**
+     * Mark a batch as completed (increments cumulative counter).
+     */
+    batchCompleted(filesInBatch: number): void {
+        this.batchState.completed++;
+        this.batchState.filesAnalyzed += filesInBatch;
+        this.postMessage({
+            command: 'batchProgress',
+            completed: this.batchState.completed,
+            total: this.batchState.total,
+            filesAnalyzed: this.batchState.filesAnalyzed,
+            elapsed: Date.now() - this.batchState.startTime
+        });
+    }
+
+    /**
+     * Get current batch stats for completion message.
+     */
+    getBatchStats(): { filesAnalyzed: number; batchCount: number; elapsed: number } {
+        return {
+            filesAnalyzed: this.batchState.filesAnalyzed,
+            batchCount: this.batchState.completed,
+            elapsed: Date.now() - this.batchState.startTime
+        };
     }
 
     updateGraph(graph: WorkflowGraph) {

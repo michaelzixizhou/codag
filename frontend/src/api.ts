@@ -136,17 +136,6 @@ export class APIClient {
         return res.data;
     }
 
-    // Legacy auth methods (kept for backwards compatibility)
-    async register(email: string, password: string): Promise<string> {
-        const res = await this.client.post('/auth/register', { email, password });
-        return res.data.access_token;
-    }
-
-    async login(email: string, password: string): Promise<string> {
-        const res = await this.client.post('/auth/login', { email, password });
-        return res.data.access_token;
-    }
-
     /**
      * Analyze workflow code.
      * Returns graph and remaining analyses count.

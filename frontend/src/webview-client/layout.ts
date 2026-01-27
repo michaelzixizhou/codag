@@ -4,7 +4,7 @@ import { snapToGrid, getNodeWorkflowCount, getVirtualNodeId } from './utils';
 import { createWorkflowPattern } from './setup';
 import { measureNodeDimensions } from './helpers';
 import { measureTextWidth } from './groups';
-import { layoutWithELK, EdgeRoute, EdgeInput } from './elk-layout';
+import { layoutWithELK, EdgeRoute, EdgeInput, NodeInput } from './elk-layout';
 import {
     NODE_WIDTH, NODE_HEIGHT,
     WORKFLOW_SPACING,
@@ -64,11 +64,12 @@ export async function layoutWorkflows(defs: any): Promise<void> {
         const components = group.components || [];
 
         // Prepare nodes for ELK layout
-        const elkNodes: Array<{ id: string; width: number; height: number }> = [];
+        const elkNodes: NodeInput[] = [];
 
         allGroupNodes.forEach((node: any) => {
             // Title nodes use larger font
-            const measureOptions = node.type === 'workflow-title' ? {
+            const isTitleNode = node.type === 'workflow-title';
+            const measureOptions = isTitleNode ? {
                 fontSize: '16px',
                 fontWeight: '600',
                 minWidth: 100,
@@ -89,7 +90,17 @@ export async function layoutWorkflows(defs: any): Promise<void> {
                 node.width = dims.width;
                 node.height = dims.height;
             }
-            elkNodes.push({ id: node.id, width: node.width, height: node.height });
+
+            const elkNode: NodeInput = { id: node.id, width: node.width, height: node.height };
+
+            // Force title nodes to the first layer so they appear at the top
+            if (isTitleNode) {
+                elkNode.layoutOptions = {
+                    'elk.layering.layerConstraint': 'FIRST'
+                };
+            }
+
+            elkNodes.push(elkNode);
         });
 
         // Prepare edges for ELK layout (include labels for proper spacing)

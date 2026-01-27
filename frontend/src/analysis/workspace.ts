@@ -70,24 +70,38 @@ export async function analyzeWorkspace(
         log('⚠️  BYPASS MODE: Cache reading/writing disabled for this analysis');
     }
 
+    // Check if workspace is open
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        vscode.window.showWarningMessage(
+            'No folder open. Use File > Open Folder to open a project.'
+        );
+        return;
+    }
+
     try {
         // Show panel immediately (don't block on file detection)
         webview.showLoading('Scanning workspace...');
+
+        // Check if workspace has any source files
+        const sourceFileCount = (await WorkflowDetector.getAllSourceFiles()).length;
+        if (sourceFileCount === 0) {
+            vscode.window.showWarningMessage(
+                'No source files found (.py, .ts, .js). Open a folder containing code.'
+            );
+            return;
+        }
 
         const workflowFiles = await WorkflowDetector.detectInWorkspace();
         pipelineStats.detected.llmFiles = workflowFiles.length;
         log(`Found ${workflowFiles.length} workflow files (LLM import patterns)`);
 
         if (workflowFiles.length === 0) {
-            webview.notifyWarning('No AI workflow files found. Open a folder with LLM API calls.');
+            vscode.window.showWarningMessage(
+                `Found ${sourceFileCount} source files but no LLM/AI code detected. ` +
+                'Codag visualizes code using OpenAI, Anthropic, Gemini, etc.'
+            );
             return;
-        }
-
-        // Prune stale cache entries for files that no longer exist
-        const existingFilePaths = workflowFiles.map(uri => uri.fsPath);
-        const pruned = await cache.pruneStaleEntries(existingFilePaths);
-        if (pruned > 0) {
-            log(`Pruned ${pruned} stale cache entries`);
         }
 
         // Read ALL workflow files first to check cache
@@ -97,7 +111,7 @@ export async function analyzeWorkspace(
                 const content = await vscode.workspace.fs.readFile(uri);
                 const text = Buffer.from(content).toString('utf8');
                 allFileContents.push({
-                    path: uri.fsPath,
+                    path: vscode.workspace.asRelativePath(uri, false),
                     content: text
                 });
             } catch (error) {
@@ -114,11 +128,12 @@ export async function analyzeWorkspace(
         // Only read files that aren't already in allFileContents (avoid duplicate reads)
         const workflowPaths = new Set(allFileContents.map(f => f.path));
         for (const uri of httpScanSourceFiles) {
-            if (!workflowPaths.has(uri.fsPath)) {
+            const relativePath = vscode.workspace.asRelativePath(uri, false);
+            if (!workflowPaths.has(relativePath)) {
                 try {
                     const content = await vscode.workspace.fs.readFile(uri);
                     httpSourceContents.push({
-                        path: uri.fsPath,
+                        path: relativePath,
                         content: Buffer.from(content).toString('utf8')
                     });
                 } catch (error) {
@@ -245,6 +260,15 @@ export async function analyzeWorkspace(
             }
         }
 
+        // Prune stale cache entries for files that no longer exist
+        // IMPORTANT: Do this AFTER HTTP client/handler files are added to allFileContents
+        // Otherwise, HTTP files (like api.ts) get pruned and then immediately need re-analysis
+        const existingFilePaths = allFileContents.map(f => f.path);
+        const pruned = await cache.pruneStaleEntries(existingFilePaths);
+        if (pruned > 0) {
+            log(`Pruned ${pruned} stale cache entries`);
+        }
+
         // Check cache for ALL files before showing file picker
         let hasCachedData = false;
         if (!bypassCache) {
@@ -276,7 +300,7 @@ export async function analyzeWorkspace(
                 log(`Using ${savedSelection.length} previously selected files`);
 
                 // Filter to previously selected files that are still workflow files
-                const selectedFiles = workflowFiles.filter(f => savedSelection.includes(f.fsPath));
+                const selectedFiles = workflowFiles.filter(f => savedSelection.includes(vscode.workspace.asRelativePath(f, false)));
                 const fileContents = allFileContents.filter(f => savedSelection.includes(f.path));
 
                 if (fileContents.length === 0) {
@@ -305,6 +329,11 @@ export async function analyzeWorkspace(
                     log(`Found ${uncachedCount} files needing analysis:`);
                     cacheResult.uncached.forEach(f => {
                         log(`  - ${vscode.workspace.asRelativePath(f.path)}`);
+                        // Debug: Show why file is uncached
+                        const debug = cache.debugFileStatus(f.path, f.content);
+                        log(`    [DEBUG] normalized: ${debug.normalizedPath}`);
+                        log(`    [DEBUG] cachedEntry: ${debug.cachedEntry}, hashMatch: ${debug.hashMatch}`);
+                        log(`    [DEBUG] computed: ${debug.computedHash}, cached: ${debug.cachedHash || 'N/A'}`);
                     });
 
                     // Show cached graphs immediately while analyzing
@@ -319,24 +348,13 @@ export async function analyzeWorkspace(
 
                     const filesToAnalyze = cacheResult.uncached;
 
-                    // Show cost estimate for significant analyses
+                    // Log cost estimate (user already saw live estimate in file picker)
                     const costEstimate = estimateAnalysisCost(filesToAnalyze);
                     log(`Cost estimate: ~${Math.round(costEstimate.inputTokens / 1000)}k input = ${costEstimate.formattedCost}`);
 
-                    if (costEstimate.estimatedCost > 0.01) {
-                        const proceed = await vscode.window.showInformationMessage(
-                            `Analyze ${filesToAnalyze.length} file(s)? Estimated cost: ${costEstimate.formattedCost}`,
-                            { modal: false },
-                            'Analyze',
-                            'Cancel'
-                        );
-                        if (proceed !== 'Analyze') {
-                            log('Analysis cancelled by user');
-                            return;
-                        }
-                    }
-
-                    const uncachedUris = filesToAnalyze.map(f => vscode.Uri.file(f.path));
+                    // Convert relative paths back to Uris for metadata builder
+                    const workspaceUri = workspaceFolders[0].uri;
+                    const uncachedUris = filesToAnalyze.map(f => vscode.Uri.joinPath(workspaceUri, f.path));
                     const metadata = await metadataBuilder.buildMetadata(uncachedUris);
 
                     // Create batches (same as initial analysis)
@@ -351,7 +369,7 @@ export async function analyzeWorkspace(
                     }
 
                     webview.notifyAnalysisStarted();
-                    webview.updateProgress(0, batches.length);
+                    webview.startBatchProgress(batches.length);
 
                     const maxConcurrency = CONFIG.CONCURRENCY.MAX_PARALLEL;
                     const costAggregator = new CostAggregator();
@@ -364,7 +382,7 @@ export async function analyzeWorkspace(
                         const batchPromises = batchSlice.map(async (batch, sliceIndex) => {
                             const batchIndex = i + sliceIndex;
                             const batchPaths = batch.map(f => f.path);
-                            const batchMetadata = metadata.filter(m => batchPaths.includes(m.file));
+                            const batchMetadata = metadata.filter(m => batchPaths.includes(vscode.workspace.asRelativePath(m.file, false)));
                             const combinedCode = combineFilesXML(batch, batchMetadata);
                             const batchInputTokens = estimateTokens(combinedCode);
 
@@ -399,6 +417,15 @@ export async function analyzeWorkspace(
                                 // Cache per-file
                                 const contentMap: Record<string, string> = {};
                                 for (const f of batch) contentMap[f.path] = f.content;
+
+                                // Debug: Log what we're about to cache
+                                log(`[CACHE-DEBUG] Storing batch result:`);
+                                log(`[CACHE-DEBUG]   contentMap keys: ${Object.keys(contentMap).map(k => vscode.workspace.asRelativePath(k)).join(', ')}`);
+                                log(`[CACHE-DEBUG]   graph nodes: ${graph.nodes.length}`);
+                                graph.nodes.forEach(n => {
+                                    log(`[CACHE-DEBUG]     - ${n.id} (source.file: ${n.source?.file || 'N/A'})`);
+                                });
+
                                 await cache.setAnalysisResult(graph, contentMap);
 
                                 // Incremental graph update - only if THIS batch added nodes
@@ -414,7 +441,7 @@ export async function analyzeWorkspace(
                                 }
 
                                 // Update progress bar
-                                webview.updateProgress(batchIndex + 1, batches.length);
+                                webview.batchCompleted(batch.length);
 
                                 log(`✓ Batch ${batchIndex + 1} complete: ${graph.nodes.length} nodes`);
                                 return graph;
@@ -493,12 +520,14 @@ export async function analyzeWorkspace(
             return;
         }
 
-        // Save selection to cache
-        await saveFilePickerSelection(extensionContext, allSourceFiles, selectedPaths);
-
         // Filter to selected files only
-        const selectedFiles = workflowFiles.filter(f => selectedPaths.includes(f.fsPath));
-        const fileContents = allFileContents.filter(f => selectedPaths.includes(f.path));
+        // Note: selectedPaths from webview are full paths, convert for comparison with relative paths
+        const selectedPathsRelative = selectedPaths.map(p => vscode.workspace.asRelativePath(p, false));
+
+        // Save selection to cache (using relative paths)
+        await saveFilePickerSelection(extensionContext, allSourceFiles, selectedPathsRelative);
+        const selectedFiles = workflowFiles.filter(f => selectedPathsRelative.includes(vscode.workspace.asRelativePath(f, false)));
+        const fileContents = allFileContents.filter(f => selectedPathsRelative.includes(f.path));
 
         log(`User selected ${selectedFiles.length} of ${workflowFiles.length} files for analysis`);
         for (const f of fileContents) {
@@ -561,29 +590,17 @@ export async function analyzeWorkspace(
         let totalOutputTokens = 0;
 
         if (filesToAnalyze.length > 0) {
-                // Show cost estimate and get user confirmation
+                // Log cost estimate (user already saw live estimate in file picker)
                 const costEstimate = estimateAnalysisCost(filesToAnalyze);
                 log(`\nCost estimate: ~${Math.round(costEstimate.inputTokens / 1000)}k input + ~${Math.round(costEstimate.outputTokens / 1000)}k output = ${costEstimate.formattedCost}`);
-
-                // Only show confirmation for non-trivial analysis (> $0.01)
-                if (costEstimate.estimatedCost > 0.01) {
-                    const proceed = await vscode.window.showInformationMessage(
-                        `Analyze ${filesToAnalyze.length} file(s)? Estimated cost: ${costEstimate.formattedCost}`,
-                        { modal: false },
-                        'Analyze',
-                        'Cancel'
-                    );
-                    if (proceed !== 'Analyze') {
-                        log('Analysis cancelled by user');
-                        return;
-                    }
-                }
 
                 // Analyze uncached files in batches
                 webview.notifyAnalysisStarted();
 
                 // Build metadata only for uncached files
-                const uncachedUris = filesToAnalyze.map(f => vscode.Uri.file(f.path));
+                // Convert relative paths back to Uris for metadata builder
+                const workspaceUri = workspaceFolders[0].uri;
+                const uncachedUris = filesToAnalyze.map(f => vscode.Uri.joinPath(workspaceUri, f.path));
                 log(`\nBuilding metadata for ${filesToAnalyze.length} uncached files...`);
                 const metadata = await metadataBuilder.buildMetadata(uncachedUris);
                 const totalLocations = metadata.reduce((sum, m) => sum + m.locations.length, 0);
@@ -630,7 +647,7 @@ export async function analyzeWorkspace(
                 }
 
                 // Update progress with correct batch total
-                webview.updateProgress(0, batches.length);
+                webview.startBatchProgress(batches.length);
 
                 // Detect all AI services from uncached files
                 let framework: string | null = null;
@@ -680,7 +697,7 @@ export async function analyzeWorkspace(
                     httpConnectionsContextParam?: string
                 ): Promise<WorkflowGraph | null> {
                     const batchPaths = batch.map(f => f.path);
-                    const batchMetadata = allMetadata.filter(m => batchPaths.includes(m.file));
+                    const batchMetadata = allMetadata.filter(m => batchPaths.includes(vscode.workspace.asRelativePath(m.file, false)));
 
                     // Detect framework for THIS batch (use first detected in batch)
                     let batchFramework: string | null = null;
@@ -736,7 +753,7 @@ export async function analyzeWorkspace(
                         log(`Batch ${batchIndex + 1} complete: ${batchGraph.nodes.length} nodes, ${batchGraph.edges.length} edges`);
 
                         // Update progress
-                        webview.updateProgress(batchIndex + 1, totalBatches);
+                        webview.batchCompleted(batch.length);
 
                         // Return batchGraph for incremental updates
                         return batchGraph;
@@ -776,7 +793,7 @@ export async function analyzeWorkspace(
                         // Parallelize individual file analysis (use same concurrency limit)
                         const fallbackPromises = batch.map((file, fileIndex) => {
                             return async () => {
-                                const fileMeta = batchMetadata.find(m => m.file === file.path);
+                                const fileMeta = batchMetadata.find(m => vscode.workspace.asRelativePath(m.file, false) === file.path);
                                 const relativePath = vscode.workspace.asRelativePath(file.path);
                                 const sizeKb = Math.round(file.content.length / 1024);
 
@@ -881,8 +898,11 @@ export async function analyzeWorkspace(
                                         }
                                     }
                                 }
-                                // Update progress bar
-                                webview.updateProgress(completedBatchCount, batches.length);
+                                // Note: batchCompleted already called in analyzeBatch on success
+                                // For non-throwing failures (null return), we still need to mark progress
+                                if (!batchGraph) {
+                                    webview.batchCompleted(0);
+                                }
                                 log(`✓ Progress: ${completedBatchCount}/${batches.length} batches`);
                             })
                             .catch((batchError: any) => {
@@ -893,7 +913,8 @@ export async function analyzeWorkspace(
                                 }
                                 log(`⚠️ Batch ${batchIndex + 1} error: ${batchError.message}`);
                                 completedBatchCount++;
-                                webview.updateProgress(completedBatchCount, batches.length);
+                                // Mark failed batch as processed (0 files analyzed)
+                                webview.batchCompleted(0);
                             });
                     });
 

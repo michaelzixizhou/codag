@@ -9,7 +9,7 @@ import json
 import uuid
 
 from models import (
-    UserCreate, UserLogin, Token, User, AnalyzeRequest, WorkflowGraph,
+    AnalyzeRequest, WorkflowGraph,
     DeviceCheckRequest, DeviceCheckResponse, DeviceLinkRequest,
     OAuthUser, AuthStateResponse,
     MetadataRequest, MetadataBundle, FileMetadataResult, FunctionMetadata,
@@ -18,13 +18,7 @@ from models import (
 )
 from prompts import build_metadata_only_prompt, USE_MERMAID_FORMAT
 from mermaid_parser import parse_mermaid_response
-from auth import (
-    get_password_hash,
-    verify_password,
-    create_access_token,
-    decode_token,
-    users_db
-)
+from auth import create_access_token, decode_token
 from database import (
     get_db, init_db,
     get_or_create_trial_device, increment_trial_usage,
@@ -250,37 +244,6 @@ async def get_me(
         provider=user.provider,
         is_paid=user.is_paid
     )
-
-
-# =============================================================================
-# Legacy Auth Endpoints (kept for backwards compatibility)
-# =============================================================================
-
-@app.post("/auth/register", response_model=Token)
-async def register(user: UserCreate):
-    if user.email in users_db:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    users_db[user.email] = {
-        "email": user.email,
-        "hashed_password": get_password_hash(user.password),
-        "is_paid": False,
-        "requests_today": 0,
-        "last_request_date": None
-    }
-
-    token = create_access_token({"sub": user.email})
-    return {"access_token": token, "token_type": "bearer"}
-
-
-@app.post("/auth/login", response_model=Token)
-async def login(user: UserLogin):
-    user_data = users_db.get(user.email)
-    if not user_data or not verify_password(user.password, user_data["hashed_password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    token = create_access_token({"sub": user.email})
-    return {"access_token": token, "token_type": "bearer"}
 
 
 # =============================================================================

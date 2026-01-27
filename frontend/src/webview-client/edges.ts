@@ -44,6 +44,37 @@ function generateElkEdgePath(route: EdgeRoute): string {
 }
 
 /**
+ * Validate that an edge route has valid numeric coordinates
+ */
+function isValidRoute(route: EdgeRoute): boolean {
+    const isValidPoint = (p: { x: number; y: number }) =>
+        typeof p.x === 'number' && typeof p.y === 'number' &&
+        !isNaN(p.x) && !isNaN(p.y) &&
+        isFinite(p.x) && isFinite(p.y);
+
+    if (!isValidPoint(route.startPoint) || !isValidPoint(route.endPoint)) {
+        return false;
+    }
+
+    // Check all bend points
+    for (const bp of route.bendPoints) {
+        if (!isValidPoint(bp)) {
+            return false;
+        }
+    }
+
+    // Ensure the edge has non-zero length (visible)
+    const dx = route.endPoint.x - route.startPoint.x;
+    const dy = route.endPoint.y - route.startPoint.y;
+    const totalBends = route.bendPoints.length;
+    if (totalBends === 0 && Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+        return false;  // Zero-length edge with no bends
+    }
+
+    return true;
+}
+
+/**
  * Find ELK edge route for an edge
  * Edge IDs in ELK are formatted as: ${groupId}_${source}->${target}
  */
@@ -61,7 +92,7 @@ function findElkEdgeRoute(
         if (group.nodes.includes(origSource) && group.nodes.includes(origTarget)) {
             const edgeId = `${group.id}_${origSource}->${origTarget}`;
             const route = state.getElkEdgeRoute(edgeId);
-            if (route) return route;
+            if (route && isValidRoute(route)) return route;
         }
     }
     return null;
@@ -233,7 +264,8 @@ export function renderEdges(): void {
             workflowGroups
         );
         if (!elkRoute) {
-            console.warn(`Filtering edge without ELK route: ${edge._originalSource || edge.source} → ${edge._originalTarget || edge.target}`);
+            const label = edge.label ? ` (label: "${edge.label}")` : '';
+            console.warn(`Filtering edge without valid ELK route: ${edge._originalSource || edge.source} → ${edge._originalTarget || edge.target}${label}`);
             return false;
         }
         return true;
@@ -489,11 +521,6 @@ function formatEdgeInfo(edge: any, header?: string): string {
         html += '</div>';
     }
 
-    // Show "No data" message if neither label nor payload
-    if (!edge.label && !edge.payload) {
-        html += `<div style="color: var(--vscode-descriptionForeground);">Control flow edge</div>`;
-    }
-
     html += '</div>';
     return html;
 }
@@ -644,6 +671,16 @@ export function updateEdgesIncremental(): void {
         }
     });
 
+    // Filter out edges without valid ELK routes (same filter as renderEdges)
+    const validEdgesToRender = edgesToRender.filter((edge: any) => {
+        const elkRoute = findElkEdgeRoute(
+            edge._originalSource || edge.source,
+            edge._originalTarget || edge.target,
+            workflowGroups
+        );
+        return elkRoute !== null;
+    });
+
     // Get or create edge paths container
     let edgePathsContainer = g.select('.edge-paths-container');
     if (edgePathsContainer.empty()) {
@@ -653,7 +690,7 @@ export function updateEdgesIncremental(): void {
 
     // Data join with composite key
     const linkGroupSelection = edgePathsContainer.selectAll('.link-group')
-        .data(edgesToRender, (d: any) => d.isBidirectional
+        .data(validEdgesToRender, (d: any) => d.isBidirectional
             ? getBidirectionalEdgeKey(d)
             : `${d.source}->${d.target}`);
 
@@ -724,12 +761,42 @@ export function updateEdgesIncremental(): void {
     state.setLinkSelections(allGroups.select('.link'), allGroups.select('.link-hover'), allGroups);
 
     // Update edge labels incrementally
-    updateEdgeLabelsIncremental(edgesToRender);
+    updateEdgeLabelsIncremental(validEdgesToRender);
 }
 
 /**
  * Incrementally update edge labels
  */
+/**
+ * Highlight or unhighlight an edge by source/target IDs
+ * Used by panel.ts for hover effects on edge list items
+ */
+export function highlightEdge(sourceId: string, targetId: string, highlight: boolean): void {
+    const { edgePathsContainer, workflowGroups } = state;
+    if (!edgePathsContainer) return;
+
+    // Find the edge group by checking all link groups
+    const linkGroups = edgePathsContainer.selectAll('.link-group');
+    linkGroups.each(function(this: any, d: any) {
+        const origSource = d._originalSource || d.source;
+        const origTarget = d._originalTarget || d.target;
+
+        // Check if this is the edge we're looking for (either direction for bidirectional)
+        const isMatch = (origSource === sourceId && origTarget === targetId) ||
+                       (d.isBidirectional && origSource === targetId && origTarget === sourceId);
+
+        if (isMatch) {
+            const group = d3.select(this);
+            const linkElement = group.select('.link');
+            if (highlight) {
+                linkElement.style('stroke', EDGE_COLOR_HOVER).style('stroke-width', `${EDGE_HOVER_STROKE_WIDTH}px`);
+            } else {
+                linkElement.style('stroke', null).style('stroke-width', null);
+            }
+        }
+    });
+}
+
 function updateEdgeLabelsIncremental(edges: any[]): void {
     const { g, workflowGroups } = state;
 

@@ -399,9 +399,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
             log('Cache cleared, reanalyzing selected files...');
 
-            // Save selection and analyze directly
+            // Save selection with relative paths
             const allSourceFiles = await WorkflowDetector.getAllSourceFiles();
-            await saveFilePickerSelection(context, allSourceFiles, paths);
+            const pathsRelative = paths.map(p => vscode.workspace.asRelativePath(p, false));
+            await saveFilePickerSelection(context, allSourceFiles, pathsRelative);
 
             // Analyze selected files with bypassCache=true to force fresh analysis
             await analyzeSelectedFiles({ ...analysisCtx, metadataBuilder }, paths, true);
@@ -434,16 +435,20 @@ export async function activate(context: vscode.ExtensionContext) {
                 return; // User cancelled
             }
 
-            // Save selection and trigger analysis for selected files
-            await saveFilePickerSelection(context, allFiles, selectedPaths);
+            // Convert to relative paths for consistency
+            const selectedPathsRelative = selectedPaths.map(p => vscode.workspace.asRelativePath(p, false));
 
-            // Read selected files in parallel
+            // Save selection with relative paths
+            await saveFilePickerSelection(context, allFiles, selectedPathsRelative);
+
+            // Read selected files in parallel (use full paths for file reading)
             const fileReadResults = await Promise.all(
                 selectedPaths.map(async (filePath) => {
                     try {
                         const uri = vscode.Uri.file(filePath);
                         const content = await vscode.workspace.fs.readFile(uri);
-                        return { path: filePath, content: Buffer.from(content).toString('utf8') };
+                        // Store relative path in result
+                        return { path: vscode.workspace.asRelativePath(filePath, false), content: Buffer.from(content).toString('utf8') };
                     } catch (error) {
                         log(`⚠️  Skipping file (read error): ${filePath}`);
                         return null;
@@ -481,7 +486,13 @@ export async function activate(context: vscode.ExtensionContext) {
             if (cacheResult.uncached.length > 0) {
                 log(`Analyzing ${cacheResult.uncached.length} uncached files...`);
 
-                const uncachedUris = cacheResult.uncached.map(f => vscode.Uri.file(f.path));
+                // Convert relative paths back to Uris for metadata builder
+                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+                if (!workspaceFolder) {
+                    log('No workspace folder found');
+                    return;
+                }
+                const uncachedUris = cacheResult.uncached.map(f => vscode.Uri.joinPath(workspaceFolder.uri, f.path));
                 const metadata = await metadataBuilder.buildMetadata(uncachedUris);
 
                 let framework: string | null = null;
@@ -504,7 +515,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const sessionAtStart = getAnalysisSession();
 
                 webview.notifyAnalysisStarted();
-                webview.updateProgress(0, batches.length);
+                webview.startBatchProgress(batches.length);
 
                 // Process batches with concurrency limiting (parallel)
                 for (let i = 0; i < batches.length; i += maxConcurrency) {
@@ -513,7 +524,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const batchPromises = batchSlice.map(async (batch, sliceIndex) => {
                         const batchIndex = i + sliceIndex;
                         const batchPaths = batch.map(f => f.path);
-                        const batchMetadata = metadata.filter(m => batchPaths.includes(m.file));
+                        const batchMetadata = metadata.filter(m => batchPaths.includes(vscode.workspace.asRelativePath(m.file, false)));
                         const combinedCode = combineFilesXML(batch, batchMetadata);
                         const batchTokens = estimateTokens(combinedCode);
 
@@ -549,7 +560,7 @@ export async function activate(context: vscode.ExtensionContext) {
                             await cache.setAnalysisResult(batchGraph, contentMap);
 
                             // Update progress only - graph updated once at end
-                            webview.updateProgress(batchIndex + 1, batches.length);
+                            webview.batchCompleted(batch.length);
 
                             log(`✓ Batch ${batchIndex + 1} complete: ${batchGraph.nodes.length} nodes`);
                             return batchGraph;

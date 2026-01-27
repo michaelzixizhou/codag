@@ -344,10 +344,7 @@ export function addHttpConnectionEdges(
 ): { graph: WorkflowGraph; addedEdges: number; addedNodes: number } {
     const _log = log || console.log;
 
-    _log(`[HTTP-EDGES] Starting with ${httpConnections?.length || 0} connections, graph has ${graph.nodes.length} nodes`);
-
     if (!httpConnections || httpConnections.length === 0) {
-        _log(`[HTTP-EDGES] No connections to process`);
         return { graph, addedEdges: 0, addedNodes: 0 };
     }
 
@@ -356,14 +353,6 @@ export function addHttpConnectionEdges(
     const existingNodeIds = new Set(graph.nodes.map(n => n.id));
     const newNodes: WorkflowNode[] = [];
     const newEdges: WorkflowEdge[] = [];
-
-    _log(`[HTTP-EDGES] Existing node IDs (${existingNodeIds.size}):`);
-    for (const id of Array.from(existingNodeIds).slice(0, 10)) {
-        _log(`[HTTP-EDGES]   - ${id}`);
-    }
-    if (existingNodeIds.size > 10) {
-        _log(`[HTTP-EDGES]   ... and ${existingNodeIds.size - 10} more`);
-    }
 
     for (const conn of httpConnections) {
         // Convert full paths to relative paths for node ID matching
@@ -374,16 +363,9 @@ export function addHttpConnectionEdges(
         const clientCandidateId = `${clientRelPath}::${conn.client.function}`;
         const handlerCandidateId = `${handlerRelPath}::${conn.handler.function}`;
 
-        _log(`[HTTP-EDGES] Processing connection:`);
-        _log(`[HTTP-EDGES]   Client: ${conn.client.file}::${conn.client.function} -> ${clientCandidateId}`);
-        _log(`[HTTP-EDGES]   Handler: ${conn.handler.file}::${conn.handler.function} -> ${handlerCandidateId}`);
-
         // Try fuzzy matching to find existing nodes
         const matchedClientId = findMatchingNodeId(clientCandidateId, lookup);
         const matchedHandlerId = findMatchingNodeId(handlerCandidateId, lookup);
-
-        _log(`[HTTP-EDGES]   Matched client: ${matchedClientId || 'NONE'}`);
-        _log(`[HTTP-EDGES]   Matched handler: ${matchedHandlerId || 'NONE'}`);
 
         // Use matched ID if found, otherwise use relative path candidate
         const clientNodeId = matchedClientId || clientCandidateId;
@@ -391,7 +373,6 @@ export function addHttpConnectionEdges(
 
         // Create placeholder node for client if no match found
         if (!matchedClientId && !existingNodeIds.has(clientNodeId)) {
-            _log(`[HTTP-EDGES]   Creating client node: ${clientNodeId}`);
             newNodes.push({
                 id: clientNodeId,
                 label: `${conn.client.method} ${conn.client.normalizedPath}`,
@@ -410,7 +391,6 @@ export function addHttpConnectionEdges(
 
         // Create placeholder node for handler if no match found
         if (!matchedHandlerId && !existingNodeIds.has(handlerNodeId)) {
-            _log(`[HTTP-EDGES]   Creating handler node: ${handlerNodeId}`);
             newNodes.push({
                 id: handlerNodeId,
                 label: `Handle ${conn.handler.path}`,
@@ -435,18 +415,15 @@ export function addHttpConnectionEdges(
         );
 
         if (!edgeExists) {
-            _log(`[HTTP-EDGES]   Creating edge: ${clientNodeId} --[${edgeLabel}]--> ${handlerNodeId}`);
             newEdges.push({
                 source: clientNodeId,
                 target: handlerNodeId,
                 label: edgeLabel
             });
-        } else {
-            _log(`[HTTP-EDGES]   Edge already exists, skipping`);
         }
     }
 
-    _log(`[HTTP-EDGES] Summary: Added ${newNodes.length} nodes, ${newEdges.length} edges`);
+    _log(`[HTTP] Added ${newEdges.length} edges, ${newNodes.length} nodes`);
 
     return {
         graph: {
@@ -480,8 +457,6 @@ export function addHttpCallerEdges(
         return { graph, addedEdges: 0, addedNodes: 0 };
     }
 
-    _log(`[HTTP-CALLERS] Searching for callers of ${httpConnections.length} HTTP client functions`);
-
     let lookup = buildNodeLookup(graph.nodes);
     const existingEdges = new Set(graph.edges.map(e => `${e.source}::${e.target}`));
     const existingNodeIds = new Set(graph.nodes.map(n => n.id));
@@ -500,8 +475,6 @@ export function addHttpCallerEdges(
         httpClientFunctions.set(`api.${conn.client.function}`, matchedId);
         httpClientFunctions.set(`this.api.${conn.client.function}`, matchedId);
     }
-
-    _log(`[HTTP-CALLERS] Looking for calls to: ${[...httpClientFunctions.keys()].join(', ')}`);
 
     // Search all functions for calls to HTTP client functions
     for (const file of repoFiles) {
@@ -525,7 +498,6 @@ export function addHttpCallerEdges(
 
                     // If caller node doesn't exist, create it
                     if (!matchedCallerId && !existingNodeIds.has(callerNodeId)) {
-                        _log(`[HTTP-CALLERS] Creating caller node: ${callerNodeId}`);
                         const newNode: WorkflowNode = {
                             id: callerNodeId,
                             label: func.name,
@@ -547,7 +519,6 @@ export function addHttpCallerEdges(
                     if (matchedCallerId) {
                         const edgeKey = `${matchedCallerId}::${targetNodeId}`;
                         if (!existingEdges.has(edgeKey)) {
-                            _log(`[HTTP-CALLERS] Adding edge: ${matchedCallerId} --> ${targetNodeId}`);
                             newEdges.push({
                                 source: matchedCallerId,
                                 target: targetNodeId,
@@ -590,8 +561,6 @@ export function addCrossFileCallEdges(
         return { graph, addedEdges: 0 };
     }
 
-    _log(`[CROSS-FILE] Processing ${crossFileCalls.length} cross-file calls`);
-
     // Build lookup for fuzzy matching
     const lookup = buildNodeLookup(graph.nodes);
     const existingEdges = new Set(
@@ -615,7 +584,6 @@ export function addCrossFileCallEdges(
         if (matchedCallerId && matchedCalleeId) {
             const edgeKey = `${matchedCallerId}::${matchedCalleeId}`;
             if (!existingEdges.has(edgeKey)) {
-                _log(`[CROSS-FILE] Adding edge: ${matchedCallerId} --> ${matchedCalleeId}`);
                 newEdges.push({
                     source: matchedCallerId,
                     target: matchedCalleeId,
@@ -623,12 +591,10 @@ export function addCrossFileCallEdges(
                 });
                 existingEdges.add(edgeKey);
             }
-        } else {
-            _log(`[CROSS-FILE] Skipped (nodes not found): ${callerCandidateId} --> ${calleeCandidateId}`);
         }
     }
 
-    _log(`[CROSS-FILE] Added ${newEdges.length} cross-file edges`);
+    _log(`[CROSS-FILE] Added ${newEdges.length} edges`);
 
     return {
         graph: {

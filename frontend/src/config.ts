@@ -83,8 +83,8 @@ export const CONFIG = {
      * Cache settings
      */
     CACHE: {
-        /** Cache format version - increment when format changes (v9: consistent full path keys) */
-        VERSION: 9,
+        /** Cache format version - increment when format changes (v10: relative path keys for security/portability) */
+        VERSION: 10,
         /** Debounce delay for saving cache to disk */
         SAVE_DEBOUNCE_MS: 500,
     },

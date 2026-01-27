@@ -16,16 +16,16 @@ const DEFAULT_LAYOUT_OPTIONS: Record<string, string> = {
     'elk.algorithm': 'layered',
     'elk.direction': 'DOWN',
 
-    // Node spacing - tight layout, edges route between
+    // Node spacing - comfortable for unlabeled edges, labels handled separately
     'elk.layered.spacing.nodeNodeBetweenLayers': '35',  // Vertical gap between layers
     'elk.spacing.nodeNode': '20',                        // Horizontal gap within layer
 
     // Edge routing - ORTHOGONAL for square edges that avoid nodes
     'elk.edgeRouting': 'ORTHOGONAL',
-    'elk.layered.spacing.edgeNodeBetweenLayers': '30',  // Space between edges and nodes vertically
-    'elk.layered.spacing.edgeEdgeBetweenLayers': '25',  // Vertical spacing between parallel edges (room for labels)
-    'elk.spacing.edgeEdge': '25',                        // Horizontal spacing between parallel edges
-    'elk.spacing.edgeNode': '20',                        // Minimum edge-to-node distance
+    'elk.layered.spacing.edgeNodeBetweenLayers': '15',  // Space between edges and nodes vertically
+    'elk.layered.spacing.edgeEdgeBetweenLayers': '20',  // Vertical spacing between parallel edges (room for labels)
+    'elk.spacing.edgeEdge': '20',                        // Horizontal spacing between parallel edges
+    'elk.spacing.edgeNode': '12',                        // Minimum edge-to-node distance
 
     // Crossing minimization - reduce edge overlaps
     'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
@@ -38,11 +38,11 @@ const DEFAULT_LAYOUT_OPTIONS: Record<string, string> = {
     // Layering strategy
     'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
 
-    // Edge label placement - let ELK handle label positioning
-    'elk.edgeLabels.inline': 'true',
+    // Edge label placement - labels placed on edges, not between layers
+    'elk.edgeLabels.inline': 'false',        // Don't reserve layer space for labels
     'elk.edgeLabels.placement': 'CENTER',
-    'elk.spacing.labelLabel': '8',           // Min space between labels
-    'elk.spacing.labelNode': '5',            // Min space label-to-node
+    'elk.spacing.labelLabel': '12',          // Min space between labels
+    'elk.spacing.labelNode': '8',            // Min space label-to-node
 
     // DO NOT merge edges - keep them separate like circuit traces
     'elk.layered.mergeEdges': 'false',
@@ -78,11 +78,18 @@ function estimateLabelWidth(label: string): number {
 
 const LABEL_HEIGHT = 18;
 
+export interface NodeInput {
+    id: string;
+    width: number;
+    height: number;
+    layoutOptions?: Record<string, string>;  // Per-node ELK options
+}
+
 /**
  * Layout nodes and edges using ELK
  */
 export async function layoutWithELK(
-    nodes: Array<{ id: string; width: number; height: number }>,
+    nodes: Array<NodeInput>,
     edges: EdgeInput[],
     options?: Record<string, string>
 ): Promise<LayoutResult> {
@@ -95,6 +102,7 @@ export async function layoutWithELK(
             id: n.id,
             width: n.width,
             height: n.height,
+            ...(n.layoutOptions ? { layoutOptions: n.layoutOptions } : {})
         })),
         edges: edges.map((e, i) => {
             const edgeId = e.id || `e${i}`;

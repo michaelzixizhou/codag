@@ -2,180 +2,16 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { staticAnalyzer } from './static-analyzer';
 import { CONFIG, EXCLUDE_PATTERNS } from './config';
+import {
+    LLM_PROVIDERS,
+    LLM_FRAMEWORKS,
+    AI_SERVICE_DOMAINS,
+    AI_ENDPOINT_PATTERNS,
+    ALL_IMPORT_PATTERNS,
+    ALL_CALL_PATTERNS,
+} from './providers';
 
 export class WorkflowDetector {
-    // LLM Client Detection Patterns
-    private static readonly LLM_CLIENT_PATTERNS = [
-        // OpenAI
-        /from\s+openai\s+import|import\s+.*OpenAI|new\s+OpenAI\s*\(/,
-        /import\s+.*from\s+['"]openai['"]/,
-
-        // Anthropic
-        /from\s+anthropic\s+import|import\s+.*Anthropic|new\s+Anthropic\s*\(/,
-        /import\s+.*from\s+['"]@anthropic-ai\/sdk['"]/,
-
-        // Google Gemini (old and new SDKs)
-        /import\s+google\.generativeai|from\s+google\s+import\s+genai|genai\.configure|genai\.Client|genai\.GenerativeModel/,
-        /from\s+['"]@google\/generative-ai['"]/,
-        /GoogleGenerativeAI/,
-
-        // Ollama
-        /from\s+ollama\s+import|import\s+.*ollama/,
-        /import\s+.*from\s+['"]ollama['"]/,
-
-        // Cohere
-        /import\s+cohere|cohere\.Client/,
-        /from\s+['"]cohere-ai['"]/,
-
-        // Hugging Face
-        /from\s+huggingface_hub\s+import|InferenceClient/,
-        /from\s+['"]@huggingface\/inference['"]/,
-
-        // xAI/Grok
-        /from\s+xai\s+import|import\s+xai/,
-        /import\s+.*from\s+['"]xai['"]/,
-        /api\.x\.ai|xai\.com|XAI_API|GROK_API/,
-
-        // Mistral AI
-        /from\s+mistralai\s+import|MistralClient|Mistral\s*\(/,
-        /import\s+.*from\s+['"]@mistralai\/mistralai['"]/,
-
-        // Together AI
-        /from\s+together\s+import|Together\s*\(/,
-        /import\s+.*from\s+['"]together-ai['"]/,
-
-        // Replicate
-        /import\s+replicate|from\s+replicate\s+import|replicate\.run/,
-        /import\s+.*from\s+['"]replicate['"]/,
-
-        // Fireworks AI
-        /from\s+fireworks\s+import|fireworks\.client/,
-        /import\s+.*from\s+['"]fireworks-ai['"]/,
-
-        // AWS Bedrock
-        /bedrock-runtime|InvokeModel|BedrockRuntimeClient/,
-        /import\s+.*from\s+['"]@aws-sdk\/client-bedrock['"]/,
-
-        // Azure OpenAI
-        /AzureOpenAI|azure\.ai\.openai/,
-        /import\s+.*from\s+['"]@azure\/openai['"]/,
-
-        // Vertex AI
-        /google\.cloud\.aiplatform|from\s+vertexai|import\s+vertexai/,
-        /import\s+.*from\s+['"]@google-cloud\/vertexai['"]/,
-
-        // AI21
-        /from\s+ai21\s+import|AI21Client|import\s+ai21/,
-        /import\s+.*from\s+['"]ai21['"]/,
-
-        // DeepSeek (uses OpenAI SDK with different base_url)
-        /api\.deepseek\.com|DEEPSEEK_API/,
-
-        // OpenRouter (uses OpenAI SDK with different base_url)
-        /openrouter\.ai|OPENROUTER_API/,
-    ];
-
-    // LLM API Call Patterns
-    private static readonly LLM_CALL_PATTERNS = [
-        /\.chat\.completions\.create/,
-        /\.completions\.create/,
-        /\.messages\.create/,
-        /\.generate_content/,
-        /\.generateContent/,
-        /\.chat\(/,
-        /\.generate\(/,
-    ];
-
-    // AI Service Domain Patterns (non-LLM AI APIs using raw HTTP)
-    private static readonly AI_SERVICE_DOMAINS = [
-        // Voice/TTS
-        /api\.elevenlabs\.io/,
-        /api\.resemble\.ai/,
-        /api\.play\.ht/,
-
-        // Video Generation
-        /api\.(dev\.)?runwayml\.com/,
-        /api\.stability\.ai/,
-        /api\.pika\.art/,
-
-        // Lip Sync / Face Animation
-        /api\.sync\.so/,
-        /api\.d-id\.com/,
-        /api\.heygen\.com/,
-
-        // Image Generation (non-SDK)
-        /api\.leonardo\.ai/,
-        /api\.ideogram\.ai/,
-
-        // xAI/Grok
-        /api\.x\.ai/,
-    ];
-
-    // AI API Endpoint Patterns
-    private static readonly AI_API_ENDPOINTS = [
-        // Voice/Audio
-        /speech-to-speech|text-to-speech|voice[_-]?clone|\/tts\b/i,
-
-        // Video
-        /image[_-]to[_-]video|video[_-]gen|act[_-]?two/i,
-
-        // Lip Sync
-        /lipsync|lip[_-]sync/i,
-
-        // Generation endpoints
-        /\/v\d+\/generate(?:\/|$)/i,
-    ];
-
-    // Framework Patterns (keep for framework-specific detection)
-    private static readonly FRAMEWORK_PATTERNS = {
-        langgraph: [
-            /from\s+langgraph/,
-            /import\s+.*from\s+['"]@langchain\/langgraph['"]/,
-            /StateGraph|MessageGraph/,
-        ],
-        mastra: [
-            /from\s+mastra/,
-            /import\s+.*from\s+['"]mastra['"]/,
-            /@mastra\//,
-        ],
-        langchain: [
-            /from\s+langchain/,
-            /import\s+.*from\s+['"]@langchain/,
-            /LLMChain|SequentialChain/,
-        ],
-        crewai: [
-            /from\s+crewai/,
-            /import\s+.*from\s+['"]crewai['"]/,
-            /Crew\s*\(/,
-        ],
-        llamaindex: [
-            /from\s+llama_index/,
-            /import\s+.*from\s+['"]llamaindex['"]/,
-            /import\s+.*from\s+['"]@llama-index/,
-        ],
-        autogen: [
-            /from\s+autogen/,
-            /import\s+.*from\s+['"]autogen['"]/,
-            /from\s+pyautogen/,
-        ],
-        haystack: [
-            /from\s+haystack/,
-            /import\s+.*from\s+['"]@deepset-ai\/haystack['"]/,
-        ],
-        semantickernel: [
-            /from\s+semantic_kernel/,
-            /import\s+.*from\s+['"]@microsoft\/semantic-kernel['"]/,
-        ],
-        pydanticai: [
-            /from\s+pydantic_ai/,
-            /import\s+.*from\s+['"]pydantic-ai['"]/,
-        ],
-        instructor: [
-            /import\s+instructor/,
-            /from\s+instructor\s+import/,
-        ]
-    };
-
     private static readonly FILE_EXTENSIONS = ['.py', '.ts', '.js', '.tsx', '.jsx'];
 
     private static async buildExcludePattern(workspaceUri: vscode.Uri): Promise<string> {
@@ -431,84 +267,49 @@ export class WorkflowDetector {
         // Two-pass detection: AST-based (accurate) → Direct LLM patterns (fallback)
 
         // Pass 1: AST-based detection (most accurate)
-        // Parses the code and looks for actual LLM API calls and imports
         if (filePath) {
             try {
                 const analysis = staticAnalyzer.analyze(content, filePath);
-                // File is a workflow if it has any LLM-related locations
-                if (analysis.locations.length > 0) {
-                    return true;
-                }
-                // Or if it has LLM-related variables
-                if (analysis.llmRelatedVariables.size > 0) {
+                if (analysis.locations.length > 0 || analysis.llmRelatedVariables.size > 0) {
                     return true;
                 }
             } catch (error) {
-                // Fall back to regex if AST parsing fails
                 console.warn('AST parsing failed, falling back to regex:', error);
             }
         }
 
         // Pass 2: Direct LLM usage detection (regex fallback)
-        // Looks for LLM imports AND API calls together
-        const hasLLMClient = this.LLM_CLIENT_PATTERNS.some(pattern => pattern.test(content));
-        const hasLLMCalls = this.LLM_CALL_PATTERNS.some(pattern => pattern.test(content));
-        const hasFramework = Object.values(this.FRAMEWORK_PATTERNS).some(patterns =>
-            patterns.some(pattern => pattern.test(content))
-        );
+        const hasLLMClient = ALL_IMPORT_PATTERNS.some(pattern => pattern.test(content));
+        const hasLLMCalls = ALL_CALL_PATTERNS.some(pattern => pattern.test(content));
+        const hasFramework = LLM_FRAMEWORKS.some(f => f.importPatterns.some(p => p.test(content)));
 
-        // Only match if file has BOTH imports AND calls, or uses a framework
         if ((hasLLMClient && hasLLMCalls) || hasFramework) {
             return true;
         }
 
         // Pass 3: AI Service API detection (non-LLM AI services using HTTP)
-        // Check for AI service domains in strings (API URLs)
-        const hasAIServiceDomain = this.AI_SERVICE_DOMAINS.some(pattern => pattern.test(content));
-        const hasAIEndpoint = this.AI_API_ENDPOINTS.some(pattern => pattern.test(content));
+        const hasAIServiceDomain = AI_SERVICE_DOMAINS.some(pattern => pattern.test(content));
+        const hasAIEndpoint = AI_ENDPOINT_PATTERNS.some(pattern => pattern.test(content));
 
-        // Match if file references AI service domains or AI-specific endpoints
         if (hasAIServiceDomain || hasAIEndpoint) {
             return true;
         }
-
-        // NOTE: Removed Pass 3 (Workflow Keywords) and Pass 4 (Workflow Filenames)
-        // These were too broad and matched files that just imported workflow types
-        // or had workflow-related names without actually calling LLMs.
-        //
-        // The backend prompt is responsible for filtering out files not in the
-        // LLM execution path. This frontend filter should only identify files
-        // that potentially interact with LLMs directly.
 
         return false;
     }
 
     static detectFramework(content: string): string | null {
-        // Check providers that use OpenAI SDK with different base_url FIRST
-        if (this.LLM_CLIENT_PATTERNS[13].test(content) || this.LLM_CLIENT_PATTERNS[14].test(content) || this.LLM_CLIENT_PATTERNS[15].test(content)) return 'grok';
-        if (this.LLM_CLIENT_PATTERNS[32].test(content)) return 'deepseek';
-        if (this.LLM_CLIENT_PATTERNS[33].test(content)) return 'openrouter';
-        if (this.LLM_CLIENT_PATTERNS[26].test(content) || this.LLM_CLIENT_PATTERNS[27].test(content)) return 'azure-openai';
+        // Check each provider's import patterns
+        for (const provider of LLM_PROVIDERS) {
+            if (provider.importPatterns.some(pattern => pattern.test(content))) {
+                return provider.id;
+            }
+        }
 
-        // Check for LLM clients
-        if (this.LLM_CLIENT_PATTERNS[0].test(content) || this.LLM_CLIENT_PATTERNS[1].test(content)) return 'openai';
-        if (this.LLM_CLIENT_PATTERNS[2].test(content) || this.LLM_CLIENT_PATTERNS[3].test(content)) return 'anthropic';
-        if (this.LLM_CLIENT_PATTERNS[4].test(content) || this.LLM_CLIENT_PATTERNS[5].test(content) || this.LLM_CLIENT_PATTERNS[6].test(content)) return 'gemini';
-        if (this.LLM_CLIENT_PATTERNS[7].test(content) || this.LLM_CLIENT_PATTERNS[8].test(content)) return 'ollama';
-        if (this.LLM_CLIENT_PATTERNS[9].test(content) || this.LLM_CLIENT_PATTERNS[10].test(content)) return 'cohere';
-        if (this.LLM_CLIENT_PATTERNS[11].test(content) || this.LLM_CLIENT_PATTERNS[12].test(content)) return 'huggingface';
-        if (this.LLM_CLIENT_PATTERNS[16].test(content) || this.LLM_CLIENT_PATTERNS[17].test(content)) return 'mistral';
-        if (this.LLM_CLIENT_PATTERNS[18].test(content) || this.LLM_CLIENT_PATTERNS[19].test(content)) return 'together';
-        if (this.LLM_CLIENT_PATTERNS[20].test(content) || this.LLM_CLIENT_PATTERNS[21].test(content)) return 'replicate';
-        if (this.LLM_CLIENT_PATTERNS[22].test(content) || this.LLM_CLIENT_PATTERNS[23].test(content)) return 'fireworks';
-        if (this.LLM_CLIENT_PATTERNS[24].test(content) || this.LLM_CLIENT_PATTERNS[25].test(content)) return 'bedrock';
-        if (this.LLM_CLIENT_PATTERNS[28].test(content) || this.LLM_CLIENT_PATTERNS[29].test(content)) return 'vertex-ai';
-        if (this.LLM_CLIENT_PATTERNS[30].test(content) || this.LLM_CLIENT_PATTERNS[31].test(content)) return 'ai21';
-
-        // Then check for specific frameworks (less specific, might have false positives)
-        for (const [framework, patterns] of Object.entries(this.FRAMEWORK_PATTERNS)) {
-            if (patterns.some(pattern => pattern.test(content))) {
-                return framework;
+        // Check frameworks
+        for (const framework of LLM_FRAMEWORKS) {
+            if (framework.importPatterns.some(pattern => pattern.test(content))) {
+                return framework.id;
             }
         }
 
@@ -527,26 +328,14 @@ export class WorkflowDetector {
     static detectAllAIServices(content: string): string[] {
         const detected: string[] = [];
 
-        // LLM Providers
-        if (this.LLM_CLIENT_PATTERNS[0].test(content) || this.LLM_CLIENT_PATTERNS[1].test(content)) detected.push('OpenAI');
-        if (this.LLM_CLIENT_PATTERNS[2].test(content) || this.LLM_CLIENT_PATTERNS[3].test(content)) detected.push('Anthropic');
-        if (this.LLM_CLIENT_PATTERNS[4].test(content) || this.LLM_CLIENT_PATTERNS[5].test(content) || this.LLM_CLIENT_PATTERNS[6].test(content)) detected.push('Gemini');
-        if (this.LLM_CLIENT_PATTERNS[7].test(content) || this.LLM_CLIENT_PATTERNS[8].test(content)) detected.push('Ollama');
-        if (this.LLM_CLIENT_PATTERNS[9].test(content) || this.LLM_CLIENT_PATTERNS[10].test(content)) detected.push('Cohere');
-        if (this.LLM_CLIENT_PATTERNS[11].test(content) || this.LLM_CLIENT_PATTERNS[12].test(content)) detected.push('HuggingFace');
-        if (this.LLM_CLIENT_PATTERNS[13].test(content) || this.LLM_CLIENT_PATTERNS[14].test(content) || this.LLM_CLIENT_PATTERNS[15].test(content)) detected.push('Grok');
-        if (this.LLM_CLIENT_PATTERNS[16].test(content) || this.LLM_CLIENT_PATTERNS[17].test(content)) detected.push('Mistral');
-        if (this.LLM_CLIENT_PATTERNS[18].test(content) || this.LLM_CLIENT_PATTERNS[19].test(content)) detected.push('Together');
-        if (this.LLM_CLIENT_PATTERNS[20].test(content) || this.LLM_CLIENT_PATTERNS[21].test(content)) detected.push('Replicate');
-        if (this.LLM_CLIENT_PATTERNS[22].test(content) || this.LLM_CLIENT_PATTERNS[23].test(content)) detected.push('Fireworks');
-        if (this.LLM_CLIENT_PATTERNS[24].test(content) || this.LLM_CLIENT_PATTERNS[25].test(content)) detected.push('Bedrock');
-        if (this.LLM_CLIENT_PATTERNS[26].test(content) || this.LLM_CLIENT_PATTERNS[27].test(content)) detected.push('Azure OpenAI');
-        if (this.LLM_CLIENT_PATTERNS[28].test(content) || this.LLM_CLIENT_PATTERNS[29].test(content)) detected.push('Vertex AI');
-        if (this.LLM_CLIENT_PATTERNS[30].test(content) || this.LLM_CLIENT_PATTERNS[31].test(content)) detected.push('AI21');
-        if (this.LLM_CLIENT_PATTERNS[32].test(content)) detected.push('DeepSeek');
-        if (this.LLM_CLIENT_PATTERNS[33].test(content)) detected.push('OpenRouter');
+        // Check all LLM providers
+        for (const provider of LLM_PROVIDERS) {
+            if (provider.importPatterns.some(pattern => pattern.test(content))) {
+                detected.push(provider.displayName);
+            }
+        }
 
-        // AI Service Domains - require API URLs or SDK imports, not just keywords
+        // AI Service Domains - require API URLs or SDK imports
         if (/api\.elevenlabs\.io|from\s+elevenlabs|import\s+elevenlabs|['"]elevenlabs['"]/i.test(content)) detected.push('ElevenLabs');
         if (/api\.(dev\.)?runwayml\.com|runwayml_sdk|from\s+runwayml|['"]runwayml['"]/i.test(content)) detected.push('Runway');
         if (/api\.sync\.so|sync_labs|synclabs|['"]sync-labs['"]/i.test(content)) detected.push('Sync Labs');
@@ -556,10 +345,10 @@ export class WorkflowDetector {
         if (/api\.leonardo\.ai|leonardo_sdk|['"]leonardo-ai['"]/i.test(content)) detected.push('Leonardo.ai');
         if (/audio2expression|a2e_sdk|['"]a2e['"]/i.test(content)) detected.push('A2E');
 
-        // Frameworks
-        for (const [framework, patterns] of Object.entries(this.FRAMEWORK_PATTERNS)) {
-            if (patterns.some(pattern => pattern.test(content))) {
-                detected.push(framework);
+        // Check frameworks
+        for (const framework of LLM_FRAMEWORKS) {
+            if (framework.importPatterns.some(pattern => pattern.test(content))) {
+                detected.push(framework.displayName);
             }
         }
 

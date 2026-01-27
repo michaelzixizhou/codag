@@ -1,7 +1,7 @@
 import * as acorn from 'acorn';
 import * as jsx from 'acorn-jsx';
 const tsParser = require('@typescript-eslint/typescript-estree');
-import { QUICK_SCAN_PATTERNS, mightContainLLM } from './providers';
+import { QUICK_SCAN_PATTERNS, mightContainLLM, AI_SERVICE_DOMAINS, AI_ENDPOINT_PATTERNS } from './providers';
 
 export interface CodeLocation {
     line: number;
@@ -500,25 +500,9 @@ export class StaticAnalyzer {
             const lines = code.split('\n');
             console.log(`[Python Analysis] Analyzing ${filePath} (${lines.length} lines)`);
 
-            // AI Service domain patterns for HTTP-based AI APIs
-            const aiServiceDomains = [
-                /api\.elevenlabs\.io/i,
-                /api\.(dev\.)?runwayml\.com/i,
-                /api\.sync\.so/i,
-                /api\.stability\.ai/i,
-                /api\.d-id\.com/i,
-                /api\.heygen\.com/i,
-                /api\.x\.ai/i,
-                /api\.leonardo\.ai/i,
-            ];
-
-            // AI-specific endpoint patterns
-            const aiEndpointPatterns = [
-                /speech-to-speech|text-to-speech|voice[_-]?clone/i,
-                /image[_-]to[_-]video|video[_-]gen/i,
-                /lipsync|lip[_-]sync/i,
-                /\/generate\b/i,
-            ];
+            // AI Service domain patterns (imported from providers.ts)
+            const aiServiceDomains = AI_SERVICE_DOMAINS;
+            const aiEndpointPatterns = AI_ENDPOINT_PATTERNS;
 
             // Helper to add location without duplicates
             const addLocation = (loc: CodeLocation) => {

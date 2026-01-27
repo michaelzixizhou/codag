@@ -503,84 +503,151 @@ body {
     .edge-tooltip { font-size: 9px; padding: 5px; max-width: 180px; }
     .button-tooltip { font-size: 8px; padding: 2px 5px; }
 }
-.loading-indicator {
+/* Notification Queue */
+.notification-queue {
     position: fixed;
     bottom: 16px;
     right: 16px;
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    padding: 8px 12px;
-    font-size: 12px;
-    z-index: 2000;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    transform: translateX(0);
-    opacity: 1;
-    transition: transform 0.3s ease, opacity 0.3s ease;
-}
-.loading-indicator.hidden {
-    transform: translateX(20px);
-    opacity: 0;
-}
-.loading-content {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    z-index: 2000;
+    pointer-events: none;
 }
-.loading-content > div:first-child {
+
+.notification-item {
+    pointer-events: auto;
+    background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    transform: translateX(100%);
+    opacity: 0;
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.2s ease,
+                scale 0.15s ease,
+                filter 0.15s ease;
+    transform-origin: bottom right;
+    min-width: 200px;
+    max-width: 320px;
+}
+
+.notification-item.visible {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.notification-item.focused {
+    scale: 1;
+    filter: brightness(1);
+}
+
+.notification-item.stacked {
+    scale: 0.95;
+    filter: brightness(0.85);
+    opacity: 0.75;
+}
+
+.notification-item.exiting {
+    transform: translateX(120%);
+    opacity: 0;
+}
+
+/* Type-specific borders */
+.notification-item[data-type="success"] {
+    border-color: #4CAF50;
+}
+.notification-item[data-type="error"] {
+    border-color: #f44336;
+}
+.notification-item[data-type="warning"] {
+    border-color: #ff9800;
+}
+.notification-item[data-type="info"] {
+    border-color: var(--vscode-focusBorder);
+}
+
+.notification-content {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: flex-start;
+    gap: 10px;
 }
-.loading-icon {
+
+.notification-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     line-height: 1;
+    flex-shrink: 0;
+    margin-top: 2px;
 }
-.loading-icon .spinner-pill {
+
+.notification-icon .spinner-pill {
     animation: spin 1s linear infinite;
     transform-origin: center center;
 }
-.loading-indicator.success {
-    border-color: #4CAF50;
+
+.notification-body {
+    flex: 1;
+    min-width: 0;
 }
-.loading-indicator.success .loading-icon,
-.loading-indicator.success .loading-icon .spinner-pill {
-    animation: none;
+
+.notification-close {
+    background: none;
+    border: none;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0;
+    margin-left: 8px;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+    flex-shrink: 0;
 }
-.loading-indicator.error {
-    border-color: #f44336;
+
+.notification-close:hover {
+    opacity: 1;
+    color: var(--vscode-foreground);
 }
-.loading-indicator.error .loading-icon,
-.loading-indicator.error .loading-icon .spinner-pill {
-    animation: none;
+
+.notification-message {
+    font-weight: 500;
+    color: var(--vscode-foreground);
 }
-.loading-indicator.warning {
-    border-color: #ff9800;
+
+.notification-subtext {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    margin-top: 2px;
 }
-.loading-indicator.warning .loading-icon,
-.loading-indicator.warning .loading-icon .spinner-pill {
-    animation: none;
-}
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-}
-.progress-bar-container {
+
+.notification-progress {
     width: 100%;
-    height: 4px;
+    height: 3px;
     background: var(--vscode-progressBar-background);
     border-radius: 2px;
     margin-top: 8px;
     overflow: hidden;
 }
-.progress-bar-fill {
+
+.notification-progress-bar {
     height: 100%;
     background: var(--vscode-progressBar-foreground);
-    width: 0%;
-    transition: width 0.3s ease;
+    transition: width 0.15s ease;
     border-radius: 2px;
+}
+
+.icon-success { color: #4CAF50; }
+.icon-error { color: #f44336; }
+.icon-warning { color: #ff9800; }
+.icon-info { color: var(--vscode-focusBorder); }
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 .progress-overlay {
     position: fixed;
@@ -1453,5 +1520,172 @@ body {
 @keyframes minimap-pulse {
     0%, 100% { opacity: 0.6; }
     50% { opacity: 1; }
+}
+
+/* ============================================
+   Tutorial / Onboarding
+   ============================================ */
+
+.tutorial-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: tutorial-fade-in 0.3s ease;
+}
+
+@keyframes tutorial-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.tutorial-panel {
+    background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 420px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    animation: tutorial-slide-up 0.3s ease;
+    position: relative;
+}
+
+@keyframes tutorial-slide-up {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.tutorial-content {
+    padding: 40px 32px 24px;
+    text-align: center;
+}
+
+.tutorial-icon {
+    margin-bottom: 20px;
+}
+
+.tutorial-icon svg {
+    width: 64px;
+    height: 64px;
+}
+
+.tutorial-icon svg.tutorial-codag-logo {
+    width: 180px;
+    height: auto;
+    color: var(--vscode-foreground);
+}
+
+.tutorial-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--vscode-foreground);
+}
+
+.tutorial-description {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--vscode-descriptionForeground);
+}
+
+.tutorial-description strong {
+    color: var(--vscode-foreground);
+    font-weight: 500;
+}
+
+.tutorial-footer {
+    padding: 16px 32px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.tutorial-dots {
+    display: flex;
+    gap: 8px;
+}
+
+.tutorial-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--vscode-input-background);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.tutorial-dot:hover {
+    background: var(--vscode-descriptionForeground);
+}
+
+.tutorial-dot.active {
+    background: var(--vscode-button-background);
+    width: 24px;
+    border-radius: 4px;
+}
+
+.tutorial-nav {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+}
+
+.tutorial-btn {
+    flex: 1;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: none;
+}
+
+.tutorial-btn-primary {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.tutorial-btn-primary:hover {
+    background: var(--vscode-button-hoverBackground);
+}
+
+.tutorial-btn-secondary {
+    background: var(--vscode-input-background);
+    color: var(--vscode-foreground);
+}
+
+.tutorial-btn-secondary:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+
+.tutorial-skip {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: none;
+    border: none;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+}
+
+.tutorial-skip:hover {
+    color: var(--vscode-foreground);
+    background: var(--vscode-input-background);
 }
 

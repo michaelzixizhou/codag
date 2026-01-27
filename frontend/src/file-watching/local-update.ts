@@ -85,7 +85,7 @@ export async function performLocalUpdate(
 
             // Update caches with the file-specific graph
             setCachedCallGraph(filePath, newCallGraph);
-            await cache.setAnalysisResult(result.graph, { [filePath]: content });
+            await cache.setAnalysisResult(result.graph, { [relativePath]: content });
 
             // Get merged graph for display
             const mergedGraph = await cache.getMergedGraph();

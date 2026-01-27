@@ -3,28 +3,9 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
-# Legacy models (kept for backwards compatibility)
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
 class TokenData(BaseModel):
     email: Optional[str] = None
     user_id: Optional[str] = None  # UUID as string
-
-class User(BaseModel):
-    email: str
-    is_paid: bool = False
-    requests_today: int = 0
-    last_request_date: Optional[str] = None
 
 
 # OAuth Models

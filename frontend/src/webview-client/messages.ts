@@ -14,6 +14,7 @@ import { updateGroupVisibility } from './visibility';
 import { populateDirectory, focusOnWorkflow } from './directory';
 import { getFilePicker } from './file-picker';
 import { setAuthState, openAuthPanel, AuthState } from './auth';
+import { notifications } from './notifications';
 
 declare const d3: any;
 
@@ -27,33 +28,31 @@ export function setupMessageHandler(): void {
 
     window.addEventListener('message', async (event: MessageEvent) => {
         const message = event.data;
-        const indicator = document.getElementById('loadingIndicator');
-        const iconSpan = indicator?.querySelector('.loading-icon') as HTMLElement;
-        const textSpan = indicator?.querySelector('.loading-text') as HTMLElement;
-
-        if (!indicator || !iconSpan || !textSpan) return;
 
         switch (message.command) {
             case 'showLoading':
-                indicator.className = 'loading-indicator';
-                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
-                textSpan.textContent = message.text || 'Loading...';
-                indicator.style.display = 'block';
+                notifications.show({
+                    type: 'loading',
+                    message: message.text || 'Loading...'
+                });
                 break;
 
             case 'updateProgress':
-                indicator.className = 'loading-indicator';
-                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
-                indicator.style.display = 'block';
+                // Legacy support - convert to new format
+                notifications.updateProgress({
+                    completed: message.current,
+                    total: message.total
+                });
+                break;
 
-                const progressContainer = indicator.querySelector('.progress-bar-container') as HTMLElement;
-                const progressFill = indicator.querySelector('.progress-bar-fill') as HTMLElement;
-                if (progressContainer && progressFill) {
-                    progressContainer.style.display = 'block';
-                    const percent = (message.current / message.total) * 100;
-                    progressFill.style.width = `${percent}%`;
-                    textSpan.textContent = `Analyzing batch ${message.current}/${message.total}...`;
-                }
+            case 'batchProgress':
+                // New cumulative progress format
+                notifications.updateProgress({
+                    completed: message.completed,
+                    total: message.total,
+                    filesAnalyzed: message.filesAnalyzed,
+                    elapsed: message.elapsed
+                });
                 break;
 
             case 'showProgressOverlay':
@@ -71,49 +70,47 @@ export function setupMessageHandler(): void {
                 break;
 
             case 'analysisStarted':
-                indicator.className = 'loading-indicator';
-                iconSpan.innerHTML = '<svg class="spinner-pill" viewBox="0 0 24 24" width="14" height="14"><rect x="8" y="2" width="8" height="20" rx="4" ry="4" fill="currentColor"/></svg>';
-                textSpan.textContent = 'Analyzing workflow...';
-                indicator.style.display = 'block';
-                // Initialize progress bar at 0%
-                const startProgressContainer = indicator.querySelector('.progress-bar-container') as HTMLElement;
-                const startProgressFill = indicator.querySelector('.progress-bar-fill') as HTMLElement;
-                if (startProgressContainer && startProgressFill) {
-                    startProgressContainer.style.display = 'block';
-                    startProgressFill.style.width = '0%';
-                }
+                notifications.show({
+                    type: 'loading',
+                    message: 'Analyzing workflow...'
+                });
                 break;
 
             case 'analysisComplete':
-                // Hide progress bar
-                const completeProgressBar = indicator.querySelector('.progress-bar-container') as HTMLElement;
-                if (completeProgressBar) completeProgressBar.style.display = 'none';
+                notifications.dismissType('loading');
+                notifications.dismissType('progress');
 
                 if (message.success) {
-                    indicator.className = 'loading-indicator success';
-                    iconSpan.textContent = '✓';
-                    textSpan.textContent = 'Analysis complete';
-                    setTimeout(() => {
-                        indicator.style.display = 'none';
-                    }, 2000);
+                    // Build completion message with stats if available
+                    let subtext: string | undefined;
+                    if (message.filesAnalyzed || message.batchCount || message.elapsed) {
+                        const parts: string[] = [];
+                        if (message.filesAnalyzed) parts.push(`${message.filesAnalyzed} files`);
+                        if (message.batchCount) parts.push(`${message.batchCount} batches`);
+                        if (message.elapsed) parts.push(`${(message.elapsed / 1000).toFixed(1)}s`);
+                        subtext = parts.join(' · ');
+                    }
+                    notifications.show({
+                        type: 'success',
+                        message: 'Analysis complete',
+                        subtext,
+                        dismissMs: 2000
+                    });
                 } else {
-                    indicator.className = 'loading-indicator error';
-                    iconSpan.textContent = '✕';
-                    textSpan.textContent = message.error || 'Analysis failed';
-                    setTimeout(() => {
-                        indicator.style.display = 'none';
-                    }, 3000);
+                    notifications.show({
+                        type: 'error',
+                        message: message.error || 'Analysis failed',
+                        dismissMs: 5000
+                    });
                 }
                 break;
 
             case 'warning':
-                indicator.className = 'loading-indicator warning';
-                iconSpan.textContent = '⚠';
-                textSpan.textContent = message.message || 'Warning';
-                indicator.style.display = 'block';
-                setTimeout(() => {
-                    indicator.style.display = 'none';
-                }, 4000);
+                notifications.show({
+                    type: 'warning',
+                    message: message.message || 'Warning',
+                    dismissMs: 4000
+                });
                 break;
 
             case 'fileStateChange':
@@ -149,39 +146,17 @@ export function setupMessageHandler(): void {
                     if (labelUpdates.size > 0) {
                         hydrateLabels(labelUpdates);
 
-                        // Show toast notification
-                        indicator.className = 'loading-indicator success';
-                        iconSpan.textContent = '✓';
-                        textSpan.textContent = `Updated ${labelUpdates.size} labels`;
-                        indicator.style.display = 'block';
-                        setTimeout(() => {
-                            indicator.style.display = 'none';
-                        }, 2000);
+                        notifications.show({
+                            type: 'success',
+                            message: `Updated ${labelUpdates.size} labels`,
+                            dismissMs: 2000
+                        });
                     }
                 }
                 break;
 
             case 'updateGraph':
                 if (message.preserveState && message.graph) {
-                    // Log graph update details
-                    const nodeCount = message.graph.nodes?.length || 0;
-                    const edgeCount = message.graph.edges?.length || 0;
-                    console.log(`[WEBVIEW] updateGraph received: ${nodeCount} nodes, ${edgeCount} edges`);
-
-                    // Log HTTP edges in update
-                    const updateHttpEdges = (message.graph.edges || []).filter((e: any) =>
-                        e.label && (e.label.startsWith('POST ') || e.label.startsWith('GET ') ||
-                                   e.label.startsWith('PUT ') || e.label.startsWith('DELETE '))
-                    );
-                    if (updateHttpEdges.length > 0) {
-                        console.log(`[WEBVIEW] HTTP edges in update: ${updateHttpEdges.length}`);
-                        updateHttpEdges.slice(0, 3).forEach((e: any) => {
-                            console.log(`[WEBVIEW]   ${e.source} --[${e.label}]--> ${e.target}`);
-                        });
-                    } else {
-                        console.log('[WEBVIEW] No HTTP edges in update');
-                    }
-
                     // Debounce rapid updates to prevent jitter
                     pendingGraphUpdate = message.graph;
 
@@ -365,7 +340,8 @@ export function setupMessageHandler(): void {
                     const filePicker = getFilePicker();
                     filePicker.show({
                         tree: message.tree,
-                        totalFiles: message.totalFiles
+                        totalFiles: message.totalFiles,
+                        pricing: message.pricing
                     }).then((selectedPaths) => {
                         // Send result back to extension
                         state.vscode.postMessage({
@@ -409,39 +385,6 @@ export function setupMessageHandler(): void {
                 getFilePicker().close(false);
 
                 if (message.graph) {
-                    // Log graph details for debugging
-                    const initNodeCount = message.graph.nodes?.length || 0;
-                    const initEdgeCount = message.graph.edges?.length || 0;
-                    console.log(`[WEBVIEW] initGraph received: ${initNodeCount} nodes, ${initEdgeCount} edges`);
-
-                    // Log HTTP edges specifically
-                    const httpEdges = (message.graph.edges || []).filter((e: any) =>
-                        e.label && (e.label.startsWith('POST ') || e.label.startsWith('GET ') ||
-                                   e.label.startsWith('PUT ') || e.label.startsWith('DELETE '))
-                    );
-                    if (httpEdges.length > 0) {
-                        console.log(`[WEBVIEW] HTTP edges found: ${httpEdges.length}`);
-                        httpEdges.slice(0, 5).forEach((e: any) => {
-                            console.log(`[WEBVIEW]   ${e.source} --[${e.label}]--> ${e.target}`);
-                        });
-                        if (httpEdges.length > 5) {
-                            console.log(`[WEBVIEW]   ... and ${httpEdges.length - 5} more`);
-                        }
-                    } else {
-                        console.log('[WEBVIEW] No HTTP edges in graph');
-                    }
-
-                    // Log nodes from api.ts
-                    const apiNodes = (message.graph.nodes || []).filter((n: any) =>
-                        n.source?.file?.includes('api.ts')
-                    );
-                    if (apiNodes.length > 0) {
-                        console.log(`[WEBVIEW] api.ts nodes: ${apiNodes.length}`);
-                        apiNodes.slice(0, 3).forEach((n: any) => {
-                            console.log(`[WEBVIEW]   ${n.id} (${n.type})`);
-                        });
-                    }
-
                     // Update graph data
                     state.setGraphData(message.graph);
 

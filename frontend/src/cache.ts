@@ -95,20 +95,20 @@ export class CacheManager {
     }
 
     /**
-     * Convert relative path to full path using workspace root.
-     * Ensures consistent cache keys regardless of path format from LLM or local updates.
+     * Convert full path to relative path using workspace root.
+     * Ensures consistent cache keys using relative paths for security and portability.
      */
-    private toFullPath(filePath: string): string {
-        // Already absolute
-        if (path.isAbsolute(filePath)) {
+    private toRelativePath(filePath: string): string {
+        // Already relative (doesn't start with / or drive letter)
+        if (!filePath.startsWith('/') && !filePath.match(/^[A-Z]:\\/i)) {
             return filePath;
         }
-        // Convert relative to absolute
+        // Convert absolute to relative
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            return filePath;
+        if (workspaceRoot && filePath.startsWith(workspaceRoot)) {
+            return filePath.slice(workspaceRoot.length).replace(/^[/\\]/, '');
         }
-        return path.join(workspaceRoot, filePath);
+        return filePath;
     }
 
     private async initializeCache() {
@@ -242,7 +242,7 @@ export class CacheManager {
      * Check if file is cached with matching hash
      */
     isFileValid(filePath: string, contentHash: string): boolean {
-        const normalizedPath = this.toFullPath(filePath);
+        const normalizedPath = this.toRelativePath(filePath);
         const cached = this.files[normalizedPath];
         return cached !== undefined && cached.hash === contentHash;
     }
@@ -252,7 +252,7 @@ export class CacheManager {
      */
     async isFileCached(filePath: string): Promise<boolean> {
         await this.initPromise;
-        const normalizedPath = this.toFullPath(filePath);
+        const normalizedPath = this.toRelativePath(filePath);
         return normalizedPath in this.files;
     }
 
@@ -260,8 +260,32 @@ export class CacheManager {
      * Get cached file data
      */
     getFile(filePath: string): FileCache | null {
-        const normalizedPath = this.toFullPath(filePath);
+        const normalizedPath = this.toRelativePath(filePath);
         return this.files[normalizedPath] || null;
+    }
+
+    /**
+     * Debug: Get info about why a file might be uncached
+     */
+    debugFileStatus(filePath: string, content: string): {
+        inputPath: string;
+        normalizedPath: string;
+        computedHash: string;
+        cachedEntry: boolean;
+        cachedHash: string | null;
+        hashMatch: boolean;
+    } {
+        const normalizedPath = this.toRelativePath(filePath);
+        const computedHash = this.hashContentAST(content, filePath);
+        const cached = this.files[normalizedPath];
+        return {
+            inputPath: filePath,
+            normalizedPath,
+            computedHash: computedHash.substring(0, 16) + '...',
+            cachedEntry: !!cached,
+            cachedHash: cached ? cached.hash.substring(0, 16) + '...' : null,
+            hashMatch: cached ? cached.hash === computedHash : false
+        };
     }
 
     /**
@@ -280,10 +304,24 @@ export class CacheManager {
             const fp = filePaths[i];
             const content = contents[i];
             const hash = this.hashContentAST(content, fp);
+            const normalizedPath = this.toRelativePath(fp);
+            const cachedEntry = this.files[normalizedPath];
 
             if (this.isFileValid(fp, hash)) {
                 cached.push({ path: fp, content });
             } else {
+                // Debug: Log why file is uncached
+                if (fp.includes('api.ts')) {
+                    console.log(`[CACHE-DEBUG] api.ts check:`);
+                    console.log(`[CACHE-DEBUG]   Input path: ${fp}`);
+                    console.log(`[CACHE-DEBUG]   Normalized: ${normalizedPath}`);
+                    console.log(`[CACHE-DEBUG]   Computed hash: ${hash.substring(0, 16)}...`);
+                    console.log(`[CACHE-DEBUG]   Cached entry exists: ${!!cachedEntry}`);
+                    if (cachedEntry) {
+                        console.log(`[CACHE-DEBUG]   Cached hash: ${cachedEntry.hash.substring(0, 16)}...`);
+                        console.log(`[CACHE-DEBUG]   Hash match: ${cachedEntry.hash === hash}`);
+                    }
+                }
                 uncached.push({ path: fp, content });
             }
         }
@@ -403,9 +441,9 @@ export class CacheManager {
             } else if (resolvedTargetFile) {
                 // Cross-file edge - normalize paths to full paths for consistent matching
                 newCrossFileEdges.push({
-                    sourceFile: this.toFullPath(resolvedSourceFile),
+                    sourceFile: this.toRelativePath(resolvedSourceFile),
                     sourceNodeId: edge.source,
-                    targetFile: this.toFullPath(resolvedTargetFile),
+                    targetFile: this.toRelativePath(resolvedTargetFile),
                     targetNodeId: edge.target,
                     label: edge.label,
                     timestamp: Date.now()
@@ -414,38 +452,30 @@ export class CacheManager {
         }
 
         // Helper to find content by matching path suffix
-        // Handles mismatch between full paths in contents keys and relative paths in node.source.file
-        const findContent = (relativePath: string): string | undefined => {
+        // Handles mismatch between paths - either direction (full↔relative)
+        const findContent = (nodePath: string): string | undefined => {
             // Try exact match first
-            if (contents[relativePath]) return contents[relativePath];
+            if (contents[nodePath]) return contents[nodePath];
 
-            // Normalize the relative path (remove leading slash, normalize separators)
-            const normalizedRel = relativePath.replace(/\\/g, '/').replace(/^\//, '');
+            // Normalize both paths for comparison
+            const normalizedNode = nodePath.replace(/\\/g, '/').replace(/^\//, '');
 
-            // Match by suffix - find the full path that ends with the relative path
-            for (const [fullPath, content] of Object.entries(contents)) {
-                const normalizedFull = fullPath.replace(/\\/g, '/');
+            for (const [contentKey, content] of Object.entries(contents)) {
+                const normalizedKey = contentKey.replace(/\\/g, '/').replace(/^\//, '');
 
-                // Try multiple matching strategies
-                if (normalizedFull === normalizedRel) return content;
-                if (normalizedFull.endsWith('/' + normalizedRel)) return content;
-                if (normalizedFull.endsWith(normalizedRel)) return content;
+                // Exact match after normalization
+                if (normalizedNode === normalizedKey) return content;
 
-                // Also try matching by last N path segments
-                const relParts = normalizedRel.split('/');
-                const fullParts = normalizedFull.split('/');
-                if (relParts.length >= 2 && fullParts.length >= relParts.length) {
-                    const relSuffix = relParts.join('/');
-                    const fullSuffix = fullParts.slice(-relParts.length).join('/');
-                    if (relSuffix === fullSuffix) return content;
-                }
+                // Either path could be full or relative, so check both directions
+                // Case 1: nodePath is full, contentKey is relative
+                if (normalizedNode.endsWith('/' + normalizedKey)) return content;
+                if (normalizedNode.endsWith(normalizedKey)) return content;
+
+                // Case 2: contentKey is full, nodePath is relative
+                if (normalizedKey.endsWith('/' + normalizedNode)) return content;
+                if (normalizedKey.endsWith(normalizedNode)) return content;
             }
 
-            // DEBUG: Log when content not found
-            console.log(`[DEBUG findContent] NOT FOUND: "${relativePath}"`);
-            console.log(`[DEBUG findContent]   normalizedRel: "${normalizedRel}"`);
-            console.log(`[DEBUG findContent]   contents keys (${Object.keys(contents).length}):`);
-            Object.keys(contents).slice(0, 5).forEach(k => console.log(`[DEBUG findContent]     - ${k}`));
             return undefined;
         };
 
@@ -464,9 +494,19 @@ export class CacheManager {
             const decNodes = nodes.filter(n => n.type === 'decision').length;
             console.log(`[CACHE]   ✓ ${file}: ${nodes.length} nodes (llm:${llmNodes}, step:${stepNodes}, dec:${decNodes})`);
 
-            const normalizedPath = this.toFullPath(file);
+            const normalizedPath = this.toRelativePath(file);
+            const hash = this.hashContentAST(content, file);
+
+            // Debug: Log when storing api.ts
+            if (file.includes('api.ts')) {
+                console.log(`[CACHE-DEBUG] STORING api.ts:`);
+                console.log(`[CACHE-DEBUG]   LLM path: ${file}`);
+                console.log(`[CACHE-DEBUG]   Normalized: ${normalizedPath}`);
+                console.log(`[CACHE-DEBUG]   Hash: ${hash.substring(0, 16)}...`);
+            }
+
             this.files[normalizedPath] = {
-                hash: this.hashContentAST(content, file),
+                hash,
                 nodes,
                 internalEdges: internalEdgesByFile.get(file) || [],
                 timestamp: Date.now()
@@ -478,12 +518,15 @@ export class CacheManager {
         const emptyFiles: string[] = [];
         for (const [filePath, content] of Object.entries(contents)) {
             // Check if already cached by the node-based loop above
-            // nodesByFile uses relative paths, so check if any relative path matches this full path
+            // Both nodesByFile (from node.source.file) and contents use relative paths now
             let alreadyCached = false;
-            for (const relPath of nodesByFile.keys()) {
-                const normalizedFull = filePath.replace(/\\/g, '/');
-                const normalizedRel = relPath.replace(/\\/g, '/');
-                if (normalizedFull.endsWith('/' + normalizedRel) || normalizedFull === normalizedRel) {
+            const normalizedContent = filePath.replace(/\\/g, '/').replace(/^\//, '');
+            for (const nodeFilePath of nodesByFile.keys()) {
+                const normalizedNode = nodeFilePath.replace(/\\/g, '/');
+                // Check both directions since either could be full or relative
+                if (normalizedNode === normalizedContent ||
+                    normalizedNode.endsWith('/' + normalizedContent) ||
+                    normalizedContent.endsWith('/' + normalizedNode)) {
                     alreadyCached = true;
                     break;
                 }
@@ -492,7 +535,7 @@ export class CacheManager {
 
             // Cache as empty (no nodes, no edges)
             // Normalize to full path for consistent cache keys
-            const normalizedPath = this.toFullPath(filePath);
+            const normalizedPath = this.toRelativePath(filePath);
             const shortPath = filePath.split('/').slice(-2).join('/');
             emptyFiles.push(shortPath);
             this.files[normalizedPath] = {
@@ -539,7 +582,7 @@ export class CacheManager {
                 delete this.workflows[wfId];
                 continue;
             }
-            const normalizedPrimary = this.toFullPath(wf.primaryFile);
+            const normalizedPrimary = this.toRelativePath(wf.primaryFile);
             const fileCache = this.files[normalizedPrimary];
             if (!fileCache || fileCache.nodes.length === 0) {
                 delete this.workflows[wfId];
@@ -613,9 +656,9 @@ export class CacheManager {
     async getMergedGraph(filePaths?: string[]): Promise<WorkflowGraph | null> {
         await this.initPromise;
 
-        // Normalize input paths to full paths (cache keys are always full paths)
+        // Normalize input paths to relative paths (cache keys are always relative)
         const targetFiles = filePaths
-            ? filePaths.map(fp => this.toFullPath(fp))
+            ? filePaths.map(fp => this.toRelativePath(fp))
             : Object.keys(this.files);
         const allNodes: WorkflowNode[] = [];
         const allEdges: WorkflowEdge[] = [];
@@ -788,7 +831,7 @@ export class CacheManager {
         await this.initPromise;
 
         // Normalize path to full path (cache keys are always full paths)
-        const normalizedPath = this.toFullPath(filePath);
+        const normalizedPath = this.toRelativePath(filePath);
 
         // Remove file cache
         delete this.files[normalizedPath];
@@ -827,7 +870,7 @@ export class CacheManager {
      * Update metadata for nodes in a cached file
      */
     updateMetadata(filePath: string, metadata: CachedMetadata) {
-        const normalizedPath = this.toFullPath(filePath);
+        const normalizedPath = this.toRelativePath(filePath);
         const fileCache = this.files[normalizedPath];
         if (!fileCache) return;
 
@@ -871,8 +914,8 @@ export class CacheManager {
     async pruneStaleEntries(existingFiles: string[]): Promise<number> {
         await this.initPromise;
 
-        // Normalize input paths to match cache keys (always full paths)
-        const existingSet = new Set(existingFiles.map(fp => this.toFullPath(fp)));
+        // Normalize input paths to match cache keys (always relative paths)
+        const existingSet = new Set(existingFiles.map(fp => this.toRelativePath(fp)));
         const toDelete: string[] = [];
 
         for (const filePath of Object.keys(this.files)) {

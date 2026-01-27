@@ -101,17 +101,8 @@
 
     <div id="edgeTooltip" class="edge-tooltip" style="display: none;"></div>
 
-    <div id="loadingIndicator" class="loading-indicator" style="display: none;">
-        <div class="loading-content">
-            <div>
-                <div class="loading-icon">⏳</div>
-                <div class="loading-text">Analyzing workflow...</div>
-            </div>
-            <div class="progress-bar-container" style="display: none;">
-                <div class="progress-bar-fill" style="width: 0%;"></div>
-            </div>
-        </div>
-    </div>
+    <!-- Notification queue (slide-up stack) -->
+    <div id="notificationQueue" class="notification-queue"></div>
 
     <div id="progressOverlay" class="progress-overlay" style="display: none;">
         <div class="overlay-content">
@@ -149,6 +140,25 @@
                 <label>Outgoing Data</label>
                 <div id="panelOutgoing">-</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Onboarding Tutorial -->
+    <div id="tutorialOverlay" class="tutorial-overlay" style="display: none;">
+        <div class="tutorial-panel">
+            <div class="tutorial-content" id="tutorialContent">
+                <!-- Content injected by JS -->
+            </div>
+            <div class="tutorial-footer">
+                <div class="tutorial-dots" id="tutorialDots">
+                    <!-- Dots injected by JS -->
+                </div>
+                <div class="tutorial-nav">
+                    <button id="tutorialPrev" class="tutorial-btn tutorial-btn-secondary">Back</button>
+                    <button id="tutorialNext" class="tutorial-btn tutorial-btn-primary">Next</button>
+                </div>
+            </div>
+            <button id="tutorialSkip" class="tutorial-skip">Skip tutorial</button>
         </div>
     </div>
 

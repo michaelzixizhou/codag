@@ -376,14 +376,4 @@ export class AuthManager {
         return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
     }
 
-    // Legacy methods for backwards compatibility
-    async login(): Promise<void> {
-        // Redirect to OAuth
-        await this.startOAuth('github');
-    }
-
-    async register(): Promise<void> {
-        // Redirect to OAuth
-        await this.startOAuth('github');
-    }
 }
