@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.png" alt="Codag" width="128" />
+<img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/logo.png" alt="Codag" width="128" />
 
 # Codag
 
@@ -17,7 +17,7 @@
 
 Codag is a VSCode extension that analyzes code containing LLM API calls and AI frameworks, then generates interactive workflow graphs showing how data flows through your AI pipelines.
 
-![Codag Demo](demo.png)
+![Codag Demo](https://raw.githubusercontent.com/michaelzixizhou/codag/main/demo.png)
 
 ## Supported Providers
 

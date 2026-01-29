@@ -2,6 +2,6 @@ services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "52104:52104"
     env_file:
       - backend/.env

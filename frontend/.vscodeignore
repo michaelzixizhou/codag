@@ -3,10 +3,11 @@ tsconfig.json
 node_modules/**
 .gitignore
 .github/**
-**/*.map
 **/*.ts
 !out/**
+out/**/*.map
 .vscode/**
 .env*
 *.log
 *.pid
+media/icon-chat-old.png

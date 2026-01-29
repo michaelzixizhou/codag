@@ -55,7 +55,7 @@ export async function activate(context: vscode.ExtensionContext) {
     log('Codag activating...');
 
     const config = vscode.workspace.getConfiguration('codag');
-    const apiUrl = config.get<string>('apiUrl', 'http://localhost:8000');
+    const apiUrl = config.get<string>('apiUrl', 'http://localhost:52104');
 
     log(`Backend API URL: ${apiUrl}`);
 

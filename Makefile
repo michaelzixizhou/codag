@@ -17,9 +17,9 @@ run:
 	cd frontend && npm run compile
 	@echo "Starting backend..."
 	@cd backend && ./venv/bin/python3.11 main.py > ../backend.log 2>&1 & echo $$! > ../backend.pid && \
-		echo "Backend running on port 8000 (PID: $$!)"
+		echo "Backend running on port 52104 (PID: $$!)"
 	@sleep 2
-	@echo "Backend running on port 8000"
+	@echo "Backend running on port 52104"
 	@echo "Launching VSCode extension..."
 	@code --extensionDevelopmentPath=$(PWD)/frontend --user-data-dir=$(PWD)/.vscode-dev $(PWD)
 	@echo ""
@@ -45,17 +45,17 @@ stop:
 		fi; \
 		rm backend.pid; \
 	fi
-	@if lsof -ti:8000 > /dev/null 2>&1; then \
-		echo "Found process on port 8000, killing..."; \
-		lsof -ti:8000 | xargs kill -9 2>/dev/null; \
-		echo "Port 8000 cleared"; \
+	@if lsof -ti:52104 > /dev/null 2>&1; then \
+		echo "Found process on port 52104, killing..."; \
+		lsof -ti:52104 | xargs kill -9 2>/dev/null; \
+		echo "Port 52104 cleared"; \
 	else \
-		echo "No process on port 8000"; \
+		echo "No process on port 52104"; \
 	fi
 
 docker-up:
 	docker compose up -d --build
-	@echo "Backend running at http://localhost:8000"
+	@echo "Backend running at http://localhost:52104"
 
 docker-down:
 	docker compose down

@@ -59,13 +59,13 @@
                 </svg>
             </div>
             <h2 class="backend-error-title">Backend not running</h2>
-            <p class="backend-error-desc">The Codag backend server is not reachable. Start it with one of:</p>
+            <p class="backend-error-desc">Codag requires a self-hosted backend server for AI analysis. See the <a href="https://github.com/michaelzixizhou/codag#self-hosting-the-backend" style="color: #7c83ff; text-decoration: underline;">setup guide</a> to get started.</p>
             <div class="backend-error-commands">
                 <code>docker compose up -d</code>
                 <span class="backend-error-or">or</span>
                 <code>make run</code>
             </div>
-            <p class="backend-error-hint">The backend runs on <code>localhost:8000</code> by default. You can change this in Settings &gt; Codag: API URL.</p>
+            <p class="backend-error-hint">The backend runs on <code>localhost:52104</code> by default. You can change this in Settings &gt; Codag: API URL.</p>
             <button id="btn-retry-backend" class="backend-error-retry">Retry</button>
         </div>
     </div>

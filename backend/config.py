@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
 
     # Backend URL
-    backend_url: str = "http://localhost:8000"
+    backend_url: str = "http://localhost:52104"
 
     class Config:
         env_file = ".env"

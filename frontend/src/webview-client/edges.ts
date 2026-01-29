@@ -257,19 +257,32 @@ export function renderEdges(): void {
     });
 
     // Filter out edges without valid ELK routes (these would render as invisible/broken)
-    const validEdgesToRender = edgesToRender.filter((edge: any) => {
+    const routeFilteredEdges = edgesToRender.filter((edge: any) => {
         const elkRoute = findElkEdgeRoute(
             edge._originalSource || edge.source,
             edge._originalTarget || edge.target,
             workflowGroups
         );
         if (!elkRoute) {
-            const label = edge.label ? ` (label: "${edge.label}")` : '';
-            console.warn(`Filtering edge without valid ELK route: ${edge._originalSource || edge.source} → ${edge._originalTarget || edge.target}${label}`);
             return false;
         }
         return true;
     });
+
+    // Filter out edges whose endpoints aren't actually rendered
+    // (catches HTTP/cross-file edges pointing to nodes in < 3 node groups or missing nodes)
+    const renderedNodeIds = new Set(state.expandedNodes.map((n: any) => n.id));
+    // Include component placeholder IDs for collapsed components
+    workflowGroups.forEach((wf: any) => {
+        (wf.components || []).forEach((comp: any) => {
+            if (!expandedComponents.has(comp.id)) {
+                renderedNodeIds.add(getComponentPlaceholderId(comp.id));
+            }
+        });
+    });
+    const validEdgesToRender = routeFilteredEdges.filter((edge: any) =>
+        renderedNodeIds.has(edge.source) && renderedNodeIds.has(edge.target)
+    );
 
     // Create container for edge paths
     const edgePathsContainer = g.append('g').attr('class', 'edge-paths-container');
@@ -679,8 +692,8 @@ export function updateEdgesIncremental(): void {
         }
     });
 
-    // Filter out edges without valid ELK routes (same filter as renderEdges)
-    const validEdgesToRender = edgesToRender.filter((edge: any) => {
+    // Filter out edges without valid ELK routes
+    const routeFilteredEdges = edgesToRender.filter((edge: any) => {
         const elkRoute = findElkEdgeRoute(
             edge._originalSource || edge.source,
             edge._originalTarget || edge.target,
@@ -688,6 +701,19 @@ export function updateEdgesIncremental(): void {
         );
         return elkRoute !== null;
     });
+
+    // Filter out edges whose endpoints aren't actually rendered
+    const renderedNodeIds = new Set(state.expandedNodes.map((n: any) => n.id));
+    workflowGroups.forEach((wf: any) => {
+        (wf.components || []).forEach((comp: any) => {
+            if (!expandedComponents.has(comp.id)) {
+                renderedNodeIds.add(getComponentPlaceholderId(comp.id));
+            }
+        });
+    });
+    const validEdgesToRender = routeFilteredEdges.filter((edge: any) =>
+        renderedNodeIds.has(edge.source) && renderedNodeIds.has(edge.target)
+    );
 
     // Get or create edge paths container
     let edgePathsContainer = g.select('.edge-paths-container');
