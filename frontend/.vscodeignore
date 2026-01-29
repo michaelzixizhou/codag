@@ -2,3 +2,11 @@ src/**
 tsconfig.json
 node_modules/**
 .gitignore
+.github/**
+**/*.map
+**/*.ts
+!out/**
+.vscode/**
+.env*
+*.log
+*.pid

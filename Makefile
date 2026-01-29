@@ -1,28 +1,16 @@
-.PHONY: setup run stop debug db-setup kill
+.PHONY: setup run stop debug kill docker-up docker-down
 
-setup: db-setup
+setup:
 	@echo "Setting up backend..."
 	cd backend && python3.11 -m venv venv && \
 		./venv/bin/pip install -r requirements.txt
 	@if [ ! -f backend/.env ]; then \
-		cp backend/.env.example backend/.env 2>/dev/null || echo "SECRET_KEY=dev-secret-change-in-prod\nGEMINI_API_KEY=your-key-here\nDATABASE_URL=postgresql+asyncpg://localhost/codag" > backend/.env; \
-		echo "Created backend/.env - add your API keys!"; \
+		cp backend/.env.example backend/.env 2>/dev/null || echo "GEMINI_API_KEY=your-key-here" > backend/.env; \
+		echo "Created backend/.env - add your Gemini API key!"; \
 	fi
 	@echo "Setting up frontend..."
 	cd frontend && npm install && npm run compile
 	@echo "Setup complete!"
-
-db-setup:
-	@echo "Checking PostgreSQL..."
-	@if command -v createdb > /dev/null 2>&1; then \
-		if ! psql -lqt | cut -d \| -f 1 | grep -qw codag; then \
-			createdb codag && echo "Created 'codag' database"; \
-		else \
-			echo "Database 'codag' already exists"; \
-		fi; \
-	else \
-		echo "WARNING: PostgreSQL not found. Install it and run: createdb codag"; \
-	fi
 
 run:
 	@echo "Compiling frontend..."
@@ -64,3 +52,10 @@ stop:
 	else \
 		echo "No process on port 8000"; \
 	fi
+
+docker-up:
+	docker compose up -d --build
+	@echo "Backend running at http://localhost:8000"
+
+docker-down:
+	docker compose down

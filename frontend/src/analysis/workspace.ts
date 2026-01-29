@@ -5,8 +5,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { APIClient, WorkflowGraph, TrialExhaustedError } from '../api';
-import { AuthManager } from '../auth';
+import { APIClient, WorkflowGraph } from '../api';
 import { CacheManager } from '../cache';
 import { WebviewManager } from '../webview';
 import { WorkflowDetector } from '../analyzer';
@@ -23,8 +22,6 @@ import {
     setHttpConnections,
     setCrossFileCalls,
     setRepoFiles,
-    setPendingAnalysisTask,
-    getPendingAnalysisTask,
     setCachedCallGraph
 } from './state';
 import { extractCallGraph } from '../call-graph-extractor';
@@ -34,7 +31,6 @@ import { extractCallGraph } from '../call-graph-extractor';
  */
 export interface WorkspaceContext {
     api: APIClient;
-    auth: AuthManager;
     cache: CacheManager;
     webview: WebviewManager;
     metadataBuilder: MetadataBuilder;
@@ -42,10 +38,6 @@ export interface WorkspaceContext {
     log: (msg: string) => void;
 }
 
-function testLiveUpdate() {                                                                                            
-      console.log('test');                                                                                               
-}                                                                                                                      
-          
 
 /**
  * Extract and cache call graphs for all files in a content map.
@@ -63,14 +55,23 @@ function cacheCallGraphsForFiles(contentMap: Record<string, string>, workspaceRo
 /**
  * Analyze the entire workspace.
  *
- * @param ctx - Context with api, auth, cache, webview, metadataBuilder, extensionContext, log
+ * @param ctx - Context with api, cache, webview, metadataBuilder, extensionContext, log
  * @param bypassCache - If true, skip cache and force fresh analysis
  */
 export async function analyzeWorkspace(
     ctx: WorkspaceContext,
     bypassCache: boolean = false
 ): Promise<void> {
-    const { api, auth, cache, webview, metadataBuilder, extensionContext, log } = ctx;
+    const { api, cache, webview, metadataBuilder, extensionContext, log } = ctx;
+
+    // Pre-flight: check backend is reachable
+    const healthy = await api.checkHealth();
+    if (!healthy) {
+        log('Backend not reachable — showing error overlay');
+        webview.showLoading('Connecting to backend...');
+        webview.notifyBackendError();
+        return;
+    }
 
     // Track analysis start time
     const startTime = Date.now();
@@ -203,10 +204,6 @@ export async function analyzeWorkspace(
         // Trace call graph from all HTTP handlers to find which ones lead to LLM calls
         const llmConnectedHandlers = traceCallGraphToLLM(rawHttpStructure, allHttpHandlers);
 
-        // Now determine which HTTP connections involve LLM-connected handlers
-        log(`\n[DEBUG] LLM-connected handlers: ${[...llmConnectedHandlers].map(f => vscode.workspace.asRelativePath(f)).join(', ')}`);
-        log(`[DEBUG] Processing ${allHttpConnections.length} HTTP connections...`);
-
         const httpClientFilesToAdd = new Set<string>();
         const httpHandlerFilesToAdd = new Set<string>();
         for (const conn of allHttpConnections) {
@@ -214,8 +211,6 @@ export async function analyzeWorkspace(
             const handlerConnectedToLLM = llmConnectedHandlers.has(conn.handler.file) ||
                 // Also check if handler file itself has LLM calls
                 rawHttpStructure.files.find(f => f.path === conn.handler.file)?.functions.some(f => f.hasLLMCall);
-
-            log(`[DEBUG]   ${vscode.workspace.asRelativePath(conn.client.file)}::${conn.client.function} -> ${vscode.workspace.asRelativePath(conn.handler.file)}::${conn.handler.function} (${conn.client.method} ${conn.client.normalizedPath}) - LLM connected: ${handlerConnectedToLLM}`);
 
             if (handlerConnectedToLLM) {
                 if (!workflowPaths.has(conn.client.file)) {
@@ -231,17 +226,12 @@ export async function analyzeWorkspace(
         if (httpClientFilesToAdd.size > 0) {
             pipelineStats.detected.httpClientFilesAdded = httpClientFilesToAdd.size;
             log(`\nAdding ${httpClientFilesToAdd.size} HTTP client file(s) to analysis:`);
-            log(`[DEBUG] httpSourceContents has ${httpSourceContents.length} files`);
             for (const clientFile of httpClientFilesToAdd) {
                 log(`  + ${vscode.workspace.asRelativePath(clientFile)}`);
                 const found = httpSourceContents.find(f => f.path === clientFile);
                 if (found) {
                     allFileContents.push(found);
                     workflowPaths.add(clientFile);
-                    log(`    [DEBUG] Found in httpSourceContents, added to allFileContents`);
-                } else {
-                    log(`    [DEBUG] ⚠️  NOT found in httpSourceContents! Looking for: ${clientFile}`);
-                    log(`    [DEBUG] httpSourceContents paths sample: ${httpSourceContents.slice(0, 3).map(f => f.path).join(', ')}`);
                 }
             }
         }
@@ -351,11 +341,6 @@ export async function analyzeWorkspace(
                     log(`Found ${uncachedCount} files needing analysis:`);
                     cacheResult.uncached.forEach(f => {
                         log(`  - ${vscode.workspace.asRelativePath(f.path)}`);
-                        // Debug: Show why file is uncached
-                        const debug = cache.debugFileStatus(f.path, f.content);
-                        log(`    [DEBUG] normalized: ${debug.normalizedPath}`);
-                        log(`    [DEBUG] cachedEntry: ${debug.cachedEntry}, hashMatch: ${debug.hashMatch}`);
-                        log(`    [DEBUG] computed: ${debug.computedHash}, cached: ${debug.cachedHash || 'N/A'}`);
                     });
 
                     // Show cached graphs immediately while analyzing
@@ -427,9 +412,7 @@ export async function analyzeWorkspace(
                                 }
 
                                 const graph = analyzeResult.graph;
-                                if (analyzeResult.remainingAnalyses >= 0) {
-                                    await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
-                                }
+
 
                                 // Track actual cost from API
                                 costAggregator.add('analyze', batch.length, analyzeResult.usage, analyzeResult.cost, batchIndex);
@@ -439,14 +422,6 @@ export async function analyzeWorkspace(
                                 // Cache per-file
                                 const contentMap: Record<string, string> = {};
                                 for (const f of batch) contentMap[f.path] = f.content;
-
-                                // Debug: Log what we're about to cache
-                                log(`[CACHE-DEBUG] Storing batch result:`);
-                                log(`[CACHE-DEBUG]   contentMap keys: ${Object.keys(contentMap).map(k => vscode.workspace.asRelativePath(k)).join(', ')}`);
-                                log(`[CACHE-DEBUG]   graph nodes: ${graph.nodes.length}`);
-                                graph.nodes.forEach(n => {
-                                    log(`[CACHE-DEBUG]     - ${n.id} (source.file: ${n.source?.file || 'N/A'})`);
-                                });
 
                                 await cache.setAnalysisResult(graph, contentMap);
                                 cacheCallGraphsForFiles(contentMap, workspaceRoot);
@@ -469,10 +444,6 @@ export async function analyzeWorkspace(
                                 log(`✓ Batch ${batchIndex + 1} complete: ${graph.nodes.length} nodes`);
                                 return graph;
                             } catch (error: any) {
-                                // Re-throw trial exhaustion, log others
-                                if (error instanceof TrialExhaustedError) {
-                                    throw error;
-                                }
                                 log(`Batch ${batchIndex + 1} failed: ${error.message}`);
                                 return null; // Don't throw - let other batches continue
                             }
@@ -481,13 +452,6 @@ export async function analyzeWorkspace(
                         try {
                             await Promise.all(batchPromises);
                         } catch (error: any) {
-                            // Handle trial quota exhaustion - store task for retry after login
-                            if (error instanceof TrialExhaustedError) {
-                                log('[auth] Trial quota exhausted during subsequent run, storing pending task...');
-                                setPendingAnalysisTask(() => analyzeWorkspace(ctx, false));
-                                webview.showAuthPanel();
-                                return;
-                            }
                             log(`Analysis failed: ${error.message}`);
                             webview.notifyAnalysisComplete(false, error.message);
                             return;
@@ -761,9 +725,7 @@ export async function analyzeWorkspace(
                         }
 
                         const batchGraph = batchResult.graph;
-                        if (batchResult.remainingAnalyses >= 0) {
-                            await auth.updateRemainingAnalyses(batchResult.remainingAnalyses);
-                        }
+
 
                         // Track actual cost from API
                         costTracker.add('analyze', batch.length, batchResult.usage, batchResult.cost, batchIndex);
@@ -782,11 +744,6 @@ export async function analyzeWorkspace(
                         // Return batchGraph for incremental updates
                         return batchGraph;
                     } catch (batchError: any) {
-                        // Re-throw trial exhaustion so outer handler can queue retry
-                        if (batchError instanceof TrialExhaustedError) {
-                            throw batchError;
-                        }
-
                         // Check if it's a file size error (HTTP 413)
                         if (batchError.response?.status === 413) {
                             const sizeErrorMsg = `Batch ${batchIndex + 1}: Files too large. Try analyzing fewer files.`;
@@ -845,9 +802,7 @@ export async function analyzeWorkspace(
                                     }
 
                                     const fileGraph = fileResult.graph;
-                                    if (fileResult.remainingAnalyses >= 0) {
-                                        await auth.updateRemainingAnalyses(fileResult.remainingAnalyses);
-                                    }
+
 
                                     // Track cost from fallback file analysis
                                     costTracker.add('analyze', 1, fileResult.usage, fileResult.cost, batchIndex);
@@ -862,11 +817,6 @@ export async function analyzeWorkspace(
                                         log(`  Cached ${relativePath}`);
                                     }
                                 } catch (fileError: any) {
-                                    // Re-throw trial exhaustion so outer handler can queue retry
-                                    if (fileError instanceof TrialExhaustedError) {
-                                        throw fileError;
-                                    }
-
                                     // Check if it's "No LLM workflow" - not a failure, just no LLM code
                                     const detail = fileError.response?.data?.detail || fileError.message || '';
                                     if (fileError.response?.status === 400 &&
@@ -927,13 +877,6 @@ export async function analyzeWorkspace(
                         log(`✓ Progress: ${completedBatchCount}/${batches.length} batches`);
                         return batchGraph;
                     } catch (batchError: any) {
-                        // TrialExhaustedError needs to stop all processing
-                        if (batchError instanceof TrialExhaustedError) {
-                            log('[auth] Trial quota exhausted, storing pending task...');
-                            setPendingAnalysisTask(() => analyzeWorkspace(ctx, false));
-                            webview.showAuthPanel();
-                            throw batchError; // Stop the worker pool
-                        }
                         log(`⚠️ Batch ${batchIndex + 1} error: ${batchError.message}`);
                         completedBatchCount++;
                         // Mark failed batch as processed (0 files analyzed)
@@ -945,10 +888,7 @@ export async function analyzeWorkspace(
                 try {
                     await runWithConcurrency(batchTasks, maxConcurrency);
                 } catch (poolError: any) {
-                    // Only TrialExhaustedError propagates here - already handled above
-                    if (!(poolError instanceof TrialExhaustedError)) {
-                        log(`Analysis pool failed: ${poolError.message}`);
-                    }
+                    log(`Analysis pool failed: ${poolError.message}`);
                 }
 
                 // Calculate and log duration
@@ -1055,15 +995,6 @@ export async function analyzeWorkspace(
             webview.show(withHttpEdges(graph, log)!);
         }
     } catch (error: any) {
-        // Handle trial quota exhaustion - store task for retry after login
-        if (error instanceof TrialExhaustedError) {
-            log('[auth] Trial quota exhausted, storing pending task and showing auth panel...');
-            setPendingAnalysisTask(() => analyzeWorkspace(ctx, bypassCache));
-            log(`[auth] pendingAnalysisTask set: ${!!getPendingAnalysisTask()}`);
-            webview.showAuthPanel();
-            return;
-        }
-
         log(`ERROR: ${error.message}`);
         log(`Status: ${error.response?.status}`);
         log(`Response: ${JSON.stringify(error.response?.data)}`);

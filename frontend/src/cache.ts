@@ -310,18 +310,6 @@ export class CacheManager {
             if (this.isFileValid(fp, hash)) {
                 cached.push({ path: fp, content });
             } else {
-                // Debug: Log why file is uncached
-                if (fp.includes('api.ts')) {
-                    console.log(`[CACHE-DEBUG] api.ts check:`);
-                    console.log(`[CACHE-DEBUG]   Input path: ${fp}`);
-                    console.log(`[CACHE-DEBUG]   Normalized: ${normalizedPath}`);
-                    console.log(`[CACHE-DEBUG]   Computed hash: ${hash.substring(0, 16)}...`);
-                    console.log(`[CACHE-DEBUG]   Cached entry exists: ${!!cachedEntry}`);
-                    if (cachedEntry) {
-                        console.log(`[CACHE-DEBUG]   Cached hash: ${cachedEntry.hash.substring(0, 16)}...`);
-                        console.log(`[CACHE-DEBUG]   Hash match: ${cachedEntry.hash === hash}`);
-                    }
-                }
                 uncached.push({ path: fp, content });
             }
         }
@@ -356,11 +344,6 @@ export class CacheManager {
             return false;
         };
 
-        // DEBUG: Log all nodes from LLM and which are in batch
-        console.log(`[DEBUG CACHE] setAnalysisResult received ${graph.nodes.length} nodes from LLM`);
-        console.log(`[DEBUG CACHE] Contents keys (batch files):`);
-        Object.keys(contents).forEach(k => console.log(`[DEBUG CACHE]   - ${k}`));
-
         // Filter nodes to only those for files in this batch
         // LLM sometimes creates nodes for files mentioned in HTTP connections context
         const filteredNodes: WorkflowNode[] = [];
@@ -373,14 +356,6 @@ export class CacheManager {
                 skippedNodes.push(node);
             }
         }
-
-        if (skippedNodes.length > 0) {
-            console.log(`[DEBUG CACHE] ⚠️  Filtered out ${skippedNodes.length} nodes for files NOT in batch:`);
-            for (const node of skippedNodes) {
-                console.log(`[DEBUG CACHE]     - ${node.id} (file: ${node.source?.file})`);
-            }
-        }
-        console.log(`[DEBUG CACHE] Keeping ${filteredNodes.length} nodes for files in batch`);
 
         // Build node lookup from filtered nodes
         const nodeById = new Map<string, WorkflowNode>();
@@ -398,13 +373,6 @@ export class CacheManager {
             const file = node.source?.file || 'unknown';
             if (!nodesByFile.has(file)) nodesByFile.set(file, []);
             nodesByFile.get(file)!.push(node);
-        }
-
-        // DEBUG: Log grouped nodes
-        console.log(`[DEBUG CACHE] Grouped into ${nodesByFile.size} files:`);
-        for (const [file, nodes] of nodesByFile) {
-            const types = nodes.map(n => n.type).join(', ');
-            console.log(`[DEBUG CACHE]   ${file}: ${nodes.length} nodes (${types})`);
         }
 
         // Categorize edges
@@ -485,25 +453,11 @@ export class CacheManager {
         for (const [file, nodes] of nodesByFile) {
             const content = findContent(file);
             if (!content) {
-                console.log(`[CACHE]   ⚠️  ${file}: content not found, skipping`);
-                continue;
+                    continue;
             }
-
-            const llmNodes = nodes.filter(n => n.type === 'llm').length;
-            const stepNodes = nodes.filter(n => n.type === 'step').length;
-            const decNodes = nodes.filter(n => n.type === 'decision').length;
-            console.log(`[CACHE]   ✓ ${file}: ${nodes.length} nodes (llm:${llmNodes}, step:${stepNodes}, dec:${decNodes})`);
 
             const normalizedPath = this.toRelativePath(file);
             const hash = this.hashContentAST(content, file);
-
-            // Debug: Log when storing api.ts
-            if (file.includes('api.ts')) {
-                console.log(`[CACHE-DEBUG] STORING api.ts:`);
-                console.log(`[CACHE-DEBUG]   LLM path: ${file}`);
-                console.log(`[CACHE-DEBUG]   Normalized: ${normalizedPath}`);
-                console.log(`[CACHE-DEBUG]   Hash: ${hash.substring(0, 16)}...`);
-            }
 
             this.files[normalizedPath] = {
                 hash,

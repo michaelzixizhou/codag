@@ -37,6 +37,7 @@ interface WorkflowLayoutData {
     nodes: any[];
     localPositions: Map<string, { x: number; y: number }>;
     localEdgeRoutes: Map<string, EdgeRoute>;  // Edge routes in local coords
+    localLabelPositions: Map<string, { x: number; y: number }>;  // Label positions in local coords
     width: number;
     height: number;
     offsetX: number;
@@ -137,7 +138,7 @@ export async function layoutWorkflows(defs: any): Promise<void> {
             }
         });
 
-        // Calculate local bounds using actual node edges
+        // Calculate local bounds using actual node edges AND edge route points
         const positionEntries = Array.from(localPositions.entries());
         if (positionEntries.length === 0) continue;
 
@@ -152,22 +153,37 @@ export async function layoutWorkflows(defs: any): Promise<void> {
             return { x: pos.x, y: pos.y, width, height };
         });
 
-        // Calculate bounds using actual node edges (tight fit)
-        const nodeMinX = Math.min(...nodesWithBounds.map(n => n.x - n.width / 2)) - GROUP_BOUNDS_PADDING_X;
-        const nodeMaxX = Math.max(...nodesWithBounds.map(n => n.x + n.width / 2)) + GROUP_BOUNDS_PADDING_X;
+        // Calculate initial bounds from node edges
+        let boundsMinX = Math.min(...nodesWithBounds.map(n => n.x - n.width / 2)) - GROUP_BOUNDS_PADDING_X;
+        let boundsMaxX = Math.max(...nodesWithBounds.map(n => n.x + n.width / 2)) + GROUP_BOUNDS_PADDING_X;
+        let boundsMinY = Math.min(...nodesWithBounds.map(n => n.y - n.height / 2)) - GROUP_BOUNDS_PADDING_TOP;
+        let boundsMaxY = Math.max(...nodesWithBounds.map(n => n.y + n.height / 2)) + GROUP_BOUNDS_PADDING_BOTTOM;
+
+        // Expand bounds to include edge route points (ELK orthogonal routing can
+        // place bend points outside the node-based bounds)
+        const EDGE_ROUTE_PADDING = 8; // Clearance for edge stroke + small margin
+        edgeRoutes.forEach((route) => {
+            const points = [route.startPoint, route.endPoint, ...route.bendPoints];
+            for (const p of points) {
+                boundsMinX = Math.min(boundsMinX, p.x - EDGE_ROUTE_PADDING);
+                boundsMaxX = Math.max(boundsMaxX, p.x + EDGE_ROUTE_PADDING);
+                boundsMinY = Math.min(boundsMinY, p.y - EDGE_ROUTE_PADDING);
+                boundsMaxY = Math.max(boundsMaxY, p.y + EDGE_ROUTE_PADDING);
+            }
+        });
 
         // Ensure bounds are wide enough for the workflow title
         const titleText = `${group.name} (${group.nodes.length} nodes)`;
         const titleWidth = measureTextWidth(titleText, '17px', '500', '"Inter", "Segoe UI", sans-serif') + 10; // +10 for padding
-        const nodeWidth = nodeMaxX - nodeMinX;
-        const finalWidth = Math.max(nodeWidth, titleWidth);
-        const widthDiff = finalWidth - nodeWidth;
+        const currentWidth = boundsMaxX - boundsMinX;
+        const finalWidth = Math.max(currentWidth, titleWidth);
+        const widthDiff = finalWidth - currentWidth;
 
         const localBounds = {
-            minX: nodeMinX - widthDiff / 2,  // Center the extra width
-            maxX: nodeMaxX + widthDiff / 2,
-            minY: Math.min(...nodesWithBounds.map(n => n.y - n.height / 2)) - GROUP_BOUNDS_PADDING_TOP,
-            maxY: Math.max(...nodesWithBounds.map(n => n.y + n.height / 2)) + GROUP_BOUNDS_PADDING_BOTTOM
+            minX: boundsMinX - widthDiff / 2,  // Center the extra width
+            maxX: boundsMaxX + widthDiff / 2,
+            minY: boundsMinY,
+            maxY: boundsMaxY
         };
 
         const width = localBounds.maxX - localBounds.minX;

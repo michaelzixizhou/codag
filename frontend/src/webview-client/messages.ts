@@ -13,7 +13,6 @@ import { fitToScreen, formatGraph } from './controls';
 import { updateGroupVisibility } from './visibility';
 import { populateDirectory, focusOnWorkflow } from './directory';
 import { getFilePicker } from './file-picker';
-import { setAuthState, openAuthPanel, AuthState } from './auth';
 import { notifications } from './notifications';
 
 declare const d3: any;
@@ -78,12 +77,15 @@ export function setupMessageHandler(): void {
                 if (progressOverlay) progressOverlay.style.display = 'none';
                 break;
 
-            case 'analysisStarted':
+            case 'analysisStarted': {
+                const backendErr = document.getElementById('backendError');
+                if (backendErr) backendErr.style.display = 'none';
                 notifications.show({
                     type: 'loading',
                     message: 'Analyzing workflow...'
                 });
                 break;
+            }
 
             case 'analysisComplete':
                 notifications.dismissType('loading');
@@ -121,6 +123,22 @@ export function setupMessageHandler(): void {
                     dismissMs: 4000
                 });
                 break;
+
+            case 'backendError': {
+                notifications.dismissType('loading');
+                const errorOverlay = document.getElementById('backendError');
+                if (errorOverlay) {
+                    errorOverlay.style.display = 'flex';
+                    const retryBtn = document.getElementById('btn-retry-backend');
+                    if (retryBtn) {
+                        retryBtn.onclick = () => {
+                            errorOverlay.style.display = 'none';
+                            state.vscode.postMessage({ command: 'retryAnalysis' });
+                        };
+                    }
+                }
+                break;
+            }
 
             case 'fileStateChange':
                 // Handle live file change indicators
@@ -403,26 +421,6 @@ export function setupMessageHandler(): void {
                         });
                     });
                 }
-                break;
-
-            case 'updateAuthState':
-                // Update auth state (trial tag, sign-up button)
-                if (message.authState) {
-                    setAuthState(message.authState as AuthState);
-                }
-                break;
-
-            case 'showAuthPanel':
-                // Show the auth panel (when trial exhausted)
-                openAuthPanel();
-                break;
-
-            case 'authError':
-                notifications.show({
-                    type: 'error',
-                    message: message.error || 'Authentication failed',
-                    dismissMs: 4000
-                });
                 break;
 
             case 'closeFilePicker':

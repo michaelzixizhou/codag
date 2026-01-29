@@ -3,14 +3,41 @@
   "displayName": "Codag",
   "description": "Visualize AI/LLM workflows in your codebase",
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelzixizhou/codag"
+  },
+  "bugs": {
+    "url": "https://github.com/michaelzixizhou/codag/issues"
+  },
+  "homepage": "https://github.com/michaelzixizhou/codag#readme",
   "publisher": "codag",
+  "icon": "media/icon-chat.png",
   "engines": {
     "vscode": "^1.95.0"
   },
   "categories": [
     "Visualization",
+    "Machine Learning",
     "Other"
   ],
+  "keywords": [
+    "llm",
+    "ai",
+    "workflow",
+    "visualization",
+    "dag",
+    "langchain",
+    "openai",
+    "anthropic",
+    "gemini",
+    "agent"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {

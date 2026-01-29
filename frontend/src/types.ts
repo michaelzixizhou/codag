@@ -71,36 +71,9 @@ export interface FileMetadata {
     relatedFiles: string[];
 }
 
-// === Auth Types ===
-export type OAuthProvider = 'github' | 'google';
-
-export interface OAuthUser {
-    id: string;
-    email: string;
-    name?: string;
-    avatar_url?: string;
-    provider: OAuthProvider;
-    is_paid: boolean;
-}
-
-export interface AuthState {
-    isAuthenticated: boolean;
-    isTrial: boolean;
-    remainingAnalyses: number;
-    user?: OAuthUser;
-}
-
 // === API Response Types ===
-export interface DeviceCheckResponse {
-    machine_id: string;
-    remaining_analyses: number;
-    is_trial: boolean;
-    is_authenticated: boolean;
-}
-
 export interface AnalyzeResult {
     graph: WorkflowGraph;
-    remainingAnalyses: number;  // -1 for unlimited (authenticated users)
     usage?: TokenUsage;
     cost?: CostData;
 }

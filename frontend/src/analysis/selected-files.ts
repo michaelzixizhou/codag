@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { APIClient } from '../api';
-import { AuthManager } from '../auth';
+
 import { CacheManager } from '../cache';
 import { WebviewManager } from '../webview';
 import { WorkflowDetector } from '../analyzer';
@@ -42,7 +42,6 @@ function cacheCallGraphsForFiles(contentMap: Record<string, string>, workspaceRo
  */
 export interface SelectedFilesContext {
     api: APIClient;
-    auth: AuthManager;
     cache: CacheManager;
     webview: WebviewManager;
     metadataBuilder: MetadataBuilder;
@@ -52,7 +51,7 @@ export interface SelectedFilesContext {
 /**
  * Analyze selected files with batching and concurrent API calls.
  *
- * @param ctx - Context with api, auth, cache, webview, metadataBuilder, log
+ * @param ctx - Context with api, cache, webview, metadataBuilder, log
  * @param selectedPaths - Array of file paths to analyze
  * @param bypassCache - If true, skip cache and force fresh analysis
  */
@@ -61,9 +60,18 @@ export async function analyzeSelectedFiles(
     selectedPaths: string[],
     bypassCache: boolean = false
 ): Promise<void> {
-    const { api, auth, cache, webview, metadataBuilder, log } = ctx;
+    const { api, cache, webview, metadataBuilder, log } = ctx;
     const startTime = Date.now();
     const sessionAtStart = getAnalysisSession();  // Capture session to detect invalidation
+
+    // Pre-flight: check backend is reachable
+    const healthy = await api.checkHealth();
+    if (!healthy) {
+        log('Backend not reachable — showing error overlay');
+        webview.showLoading('Connecting to backend...');
+        webview.notifyBackendError();
+        return;
+    }
 
     try {
         webview.showLoading('Analyzing selected files...');
@@ -152,8 +160,6 @@ export async function analyzeSelectedFiles(
             const batchTokens = estimateTokens(combinedCode);
 
             log(`Analyzing batch ${batchIndex + 1}/${batches.length} (${batch.length} files, ~${Math.round(batchTokens / 1000)}k tokens)...`);
-            // DEBUG: Log files being sent to LLM
-            console.log(`[DEBUG] Batch ${batchIndex + 1} files:`, batch.map(f => f.path));
 
             try {
                 const analyzeResult = await api.analyzeWorkflow(
@@ -172,19 +178,10 @@ export async function analyzeSelectedFiles(
                 }
 
                 const graph = analyzeResult.graph;
-                if (analyzeResult.remainingAnalyses >= 0) {
-                    await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
-                }
+
 
                 if (graph && graph.nodes) {
                     newGraphs.push(graph);
-                    // DEBUG: Log nodes returned per file
-                    const nodesByFile = new Map<string, number>();
-                    for (const node of graph.nodes) {
-                        const file = node.source?.file || 'unknown';
-                        nodesByFile.set(file, (nodesByFile.get(file) || 0) + 1);
-                    }
-                    console.log(`[DEBUG] Batch ${batchIndex + 1} nodes by file:`, Object.fromEntries(nodesByFile));
 
                     // Cache per-file (only successful results get cached)
                     const contentMap: Record<string, string> = {};
@@ -209,9 +206,6 @@ export async function analyzeSelectedFiles(
                             log(`Warning: Incremental update failed: ${updateError.message}`);
                         }
                     }
-                } else {
-                    // DEBUG: Log when no nodes returned
-                    console.log(`[DEBUG] Batch ${batchIndex + 1} returned NO nodes. Files were:`, batch.map(f => f.path));
                 }
 
                 webview.batchCompleted(batch.length);

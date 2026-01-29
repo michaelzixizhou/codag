@@ -116,13 +116,10 @@ export class WorkflowDetector {
         // Prevent infinite recursion from circular imports
         const MAX_DEPTH = CONFIG.IMPORTS.MAX_DEPTH;
         if (depth >= MAX_DEPTH) {
-            console.log(`⚠️  Max recursion depth ${MAX_DEPTH} reached, stopping import expansion`);
             return [];
         }
 
         if (baseFiles.length === 0) return [];
-
-        console.log(`📂 Scanning ${allFiles.length} files for imports (depth ${depth})...`);
 
         const importers: vscode.Uri[] = [];
         const baseFilesSet = new Set(baseFiles.map(f => f.fsPath));
@@ -177,8 +174,6 @@ export class WorkflowDetector {
                 continue;
             }
         }
-
-        console.log(`✓ Found ${importers.length} files importing base LLM files`);
 
         // Optional: Expand one more level (find files that import the importers)
         // This catches chains like: endpoint.py → main.py → gemini_client.py

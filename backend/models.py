@@ -1,53 +1,5 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime
-from enum import Enum
-
-class TokenData(BaseModel):
-    email: Optional[str] = None
-    user_id: Optional[str] = None  # UUID as string
-
-
-# OAuth Models
-class OAuthProvider(str, Enum):
-    GITHUB = "github"
-    GOOGLE = "google"
-
-class OAuthUser(BaseModel):
-    """User response model for OAuth-authenticated users."""
-    id: str
-    email: str
-    name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    provider: OAuthProvider
-    is_paid: bool = False
-
-    class Config:
-        from_attributes = True
-
-
-# Trial/Device Models
-class DeviceCheckRequest(BaseModel):
-    """Request to check/register a trial device."""
-    machine_id: str
-
-class DeviceCheckResponse(BaseModel):
-    """Response with trial status."""
-    machine_id: str
-    remaining_analyses: int
-    is_trial: bool = True
-    is_authenticated: bool = False
-
-class DeviceLinkRequest(BaseModel):
-    """Request to link a device to an authenticated user."""
-    machine_id: str
-
-class AuthStateResponse(BaseModel):
-    """Full auth state for frontend."""
-    is_authenticated: bool
-    is_trial: bool
-    remaining_analyses: int
-    user: Optional[OAuthUser] = None
 
 class LocationMetadata(BaseModel):
     line: int

@@ -1,48 +1,21 @@
-from fastapi import FastAPI, Depends, HTTPException, Header, Request, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
-from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import Optional, Callable, Awaitable, Any
+from typing import Optional
 import json
-import uuid
 
 from models import (
     AnalyzeRequest, WorkflowGraph,
-    DeviceCheckRequest, DeviceCheckResponse, DeviceLinkRequest,
-    OAuthUser, AuthStateResponse,
     MetadataRequest, MetadataBundle, FileMetadataResult, FunctionMetadata,
     CondenseRequest, CondenseResponse,
     TokenUsage, CostData, AnalyzeResponse
 )
 from prompts import build_metadata_only_prompt, USE_MERMAID_FORMAT
 from mermaid_parser import parse_mermaid_response
-from auth import create_access_token, decode_token
-from database import (
-    get_db, init_db,
-    get_or_create_trial_device, increment_trial_usage,
-    get_or_create_user, link_device_to_user,
-    UserDB
-)
-from oauth import (
-    oauth, get_github_user_info, get_google_user_info,
-    is_github_configured, is_google_configured
-)
 from gemini_client import gemini_client
 from analyzer import static_analyzer
 from config import settings
 
-# OAuth callback URI for VSCode extension
-VSCODE_CALLBACK_URI = "vscode://codag.codag/auth/callback"
-
 app = FastAPI(title="Codag")
-
-# Add session middleware for OAuth state
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.secret_key,
-)
 
 app.add_middleware(
     CORSMiddleware,
@@ -50,200 +23,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Remaining-Analyses"],
 )
-
-
-@app.on_event("startup")
-async def startup():
-    """Initialize database on startup."""
-    await init_db()
-
-
-# =============================================================================
-# OAuth Helpers
-# =============================================================================
-
-async def _redirect_to_oauth(
-    provider_name: str,
-    oauth_client: Any,
-    is_configured: Callable[[], bool],
-    request: Request,
-    state: Optional[str]
-) -> RedirectResponse:
-    """Common OAuth login redirect logic."""
-    print(f"[OAuth] {provider_name} login requested, configured: {is_configured()}")
-    if not is_configured():
-        raise HTTPException(status_code=501, detail=f"{provider_name} OAuth not configured")
-
-    if state:
-        request.session['oauth_state'] = state
-
-    redirect_uri = f"{settings.backend_url}/auth/{provider_name.lower()}/callback"
-    print(f"[OAuth] Redirecting to {provider_name} with callback: {redirect_uri}")
-    try:
-        return await oauth_client.authorize_redirect(request, redirect_uri)
-    except Exception as e:
-        print(f"[OAuth] {provider_name} redirect error: {e}")
-        raise HTTPException(status_code=500, detail=f"OAuth redirect failed: {str(e)}")
-
-
-async def _handle_oauth_callback(
-    provider_name: str,
-    oauth_client: Any,
-    is_configured: Callable[[], bool],
-    get_user_info: Callable[[dict], Awaitable[dict]],
-    request: Request,
-    db: AsyncSession
-) -> RedirectResponse:
-    """Common OAuth callback handling logic."""
-    if not is_configured():
-        raise HTTPException(status_code=501, detail=f"{provider_name} OAuth not configured")
-
-    try:
-        token = await oauth_client.authorize_access_token(request)
-        user_info = await get_user_info(token)
-
-        if not user_info.get('email'):
-            return RedirectResponse(
-                url=f"{VSCODE_CALLBACK_URI}?error=no_email",
-                status_code=302
-            )
-
-        user = await get_or_create_user(
-            db,
-            email=user_info['email'],
-            name=user_info.get('name'),
-            provider=provider_name.lower(),
-            provider_id=user_info['provider_id'],
-        )
-
-        jwt_token = create_access_token({
-            "sub": user.email,
-            "user_id": str(user.id)
-        })
-
-        return RedirectResponse(
-            url=f"{VSCODE_CALLBACK_URI}?token={jwt_token}",
-            status_code=302
-        )
-    except Exception as e:
-        return RedirectResponse(
-            url=f"{VSCODE_CALLBACK_URI}?error={str(e)}",
-            status_code=302
-        )
-
-
-# =============================================================================
-# Device/Trial Auth Endpoints
-# =============================================================================
-
-@app.post("/auth/device", response_model=DeviceCheckResponse)
-async def check_device(
-    request: DeviceCheckRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Check or register a trial device.
-    Returns remaining analyses for the day.
-    """
-    device, remaining = await get_or_create_trial_device(db, request.machine_id)
-
-    return DeviceCheckResponse(
-        machine_id=request.machine_id,
-        remaining_analyses=remaining,
-        is_trial=True,
-        is_authenticated=device.user_id is not None
-    )
-
-
-@app.post("/auth/device/link")
-async def link_device(
-    request: DeviceLinkRequest,
-    authorization: Optional[str] = Header(None),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Link a trial device to an authenticated user.
-    Called after OAuth signup.
-    """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    token = authorization.replace("Bearer ", "")
-    token_data = decode_token(token)
-
-    if not token_data.user_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    await link_device_to_user(db, request.machine_id, uuid.UUID(token_data.user_id))
-
-    return {"status": "linked"}
-
-
-# =============================================================================
-# OAuth Endpoints
-# =============================================================================
-
-@app.get("/auth/github")
-async def github_login(request: Request, state: Optional[str] = None):
-    """Redirect to GitHub OAuth."""
-    return await _redirect_to_oauth("GitHub", oauth.github, is_github_configured, request, state)
-
-
-@app.get("/auth/github/callback")
-async def github_callback(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle GitHub OAuth callback."""
-    return await _handle_oauth_callback(
-        "GitHub", oauth.github, is_github_configured, get_github_user_info, request, db
-    )
-
-
-@app.get("/auth/google")
-async def google_login(request: Request, state: Optional[str] = None):
-    """Redirect to Google OAuth."""
-    return await _redirect_to_oauth("Google", oauth.google, is_google_configured, request, state)
-
-
-@app.get("/auth/google/callback")
-async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle Google OAuth callback."""
-    return await _handle_oauth_callback(
-        "Google", oauth.google, is_google_configured, get_google_user_info, request, db
-    )
-
-
-@app.get("/auth/me", response_model=OAuthUser)
-async def get_me(
-    authorization: Optional[str] = Header(None),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get current authenticated user info."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    token = authorization.replace("Bearer ", "")
-    token_data = decode_token(token)
-
-    if not token_data.user_id:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    result = await db.execute(
-        select(UserDB).where(UserDB.id == uuid.UUID(token_data.user_id))
-    )
-    user = result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    return OAuthUser(
-        id=str(user.id),
-        email=user.email,
-        name=user.name,
-        avatar_url=None,  # Not stored in DB, could fetch from provider if needed
-        provider=user.provider,
-        is_paid=user.is_paid
-    )
 
 
 # =============================================================================
@@ -254,20 +34,10 @@ async def get_me(
 async def analyze_workflow(
     request: AnalyzeRequest,
     response: Response,
-    x_device_id: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-    db: AsyncSession = Depends(get_db)
 ):
     """
     Analyze code for LLM workflow patterns.
-
-    Authentication:
-    - X-Device-ID header: Trial mode (5 analyses/day)
-    - Authorization: Bearer <token>: Authenticated mode (unlimited)
     """
-    # TEMPORARY: Disable auth/trial checks for development
-    remaining_analyses = -1  # -1 means unlimited
-
     # Track cumulative cost across retries
     total_usage = TokenUsage(input_tokens=0, output_tokens=0, total_tokens=0, cached_tokens=0)
     total_cost = CostData(input_cost=0.0, output_cost=0.0, total_cost=0.0)
@@ -353,8 +123,6 @@ async def analyze_workflow(
                     break  # Success - exit retry loop
                 except ValueError as e:
                     if attempt < MAX_RETRIES:
-                        print(f"[analyze] Parse attempt {attempt + 1} failed: {e}")
-                        print(f"[analyze] Retrying with correction prompt...")
                         # Retry with a correction prompt
                         correction_prompt = f"""Your previous response could not be parsed. Error: {str(e)[:200]}
 
@@ -384,7 +152,6 @@ Please re-analyze the code and output in the CORRECT format."""
                             accumulate_cost(retry_usage, retry_cost)
                             result = result.strip()
                         except Exception as retry_err:
-                            print(f"[analyze] Retry LLM call failed: {retry_err}")
                             raise HTTPException(
                                 status_code=500,
                                 detail=f"Analysis failed after retry: {str(e)}"
@@ -404,10 +171,6 @@ Please re-analyze the code and output in the CORRECT format."""
             for node in graph.nodes:
                 if node.source and node.source.file:
                     node.source.file = fix_file_path(node.source.file, request.file_paths)
-
-            # DEBUG: Log workflows
-            for wf in graph.workflows:
-                print(f"DEBUG: Workflow '{wf.name}' ({len(wf.nodeIds)} nodes)")
 
             return AnalyzeResponse(graph=graph, usage=total_usage, cost=total_cost)
         else:
@@ -450,11 +213,6 @@ Please re-analyze the code and output in the CORRECT format."""
                 if node.get('source') and node['source'].get('file'):
                     node['source']['file'] = fix_file_path(node['source']['file'], request.file_paths)
 
-            workflows = graph_data.get('workflows', [])
-            for wf in workflows:
-                node_count = len(wf.get('nodeIds', []))
-                print(f"DEBUG: Workflow '{wf.get('name')}' ({node_count} nodes)")
-
             graph = WorkflowGraph(**graph_data)
             return AnalyzeResponse(graph=graph, usage=total_usage, cost=total_cost)
     except HTTPException:
@@ -464,11 +222,7 @@ Please re-analyze the code and output in the CORRECT format."""
 
 
 @app.post("/analyze/metadata-only")
-async def analyze_metadata_only(
-    request: MetadataRequest,
-    x_device_id: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None)
-):
+async def analyze_metadata_only(request: MetadataRequest):
     """Generate metadata (labels, descriptions) for functions.
 
     This is a lightweight endpoint for incremental updates.

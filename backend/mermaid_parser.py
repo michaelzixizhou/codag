@@ -86,9 +86,6 @@ def parse_mermaid_response(response: str) -> WorkflowGraph:
             diagram_part = response[:sep_before_meta]
             metadata_part = response[metadata_marker + 9:]  # Skip "metadata:"
         else:
-            # No valid separator found - raise with context
-            print(f"[mermaid_parser] ERROR: No --- before metadata:")
-            print(f"[mermaid_parser] Response preview: {response[:500]}")
             raise ValueError(f"No separator (---) found before 'metadata:' marker. Response starts with: {response[:200]}")
     elif "---" in response:
         # Has --- but no metadata: marker - use last ---
@@ -96,9 +93,6 @@ def parse_mermaid_response(response: str) -> WorkflowGraph:
         diagram_part = response[:last_sep]
         metadata_part = response[last_sep + 3:]
     else:
-        # No separator at all - raise with context
-        print(f"[mermaid_parser] ERROR: Missing --- separator")
-        print(f"[mermaid_parser] Response preview: {response[:500]}")
         raise ValueError(f"Response missing metadata separator (---). Response starts with: {response[:200]}")
 
     # Clean up metadata part - strip markdown and whitespace
@@ -122,9 +116,6 @@ def parse_mermaid_response(response: str) -> WorkflowGraph:
     try:
         node_metadata = yaml.safe_load(metadata_part) or {}
     except yaml.YAMLError as e:
-        # Malformed YAML metadata - log and raise with context
-        print(f"[mermaid_parser] ERROR: Invalid metadata YAML")
-        print(f"[mermaid_parser] Metadata part preview: {metadata_part[:500]}")
         raise ValueError(f"Invalid metadata YAML: {e}\nMetadata starts with: {metadata_part[:200]}")
 
     # Parse mermaid diagrams (can be multiple flowchart TD blocks)
@@ -265,7 +256,6 @@ def parse_flowchart(lines: List[str], metadata: Dict[str, Any]) -> Tuple[List[Gr
                 if "type" in meta:
                     meta_type = meta["type"]
                     if meta_type not in VALID_TYPES:
-                        print(f"[mermaid_parser] Normalizing invalid type '{meta_type}' to 'step' for {node_id}")
                         meta_type = "step"
                     node.type = meta_type
                 if "model" in meta:
@@ -308,15 +298,7 @@ def parse_flowchart(lines: List[str], metadata: Dict[str, Any]) -> Tuple[List[Gr
             if target not in nodes:
                 cross_batch_targets.append(target)
         else:
-            print(f"[mermaid_parser] Skipping edge {source} -> {target}: source not defined")
-
-    if cross_batch_targets:
-        print(f"[mermaid_parser] Cross-batch edge targets (to be resolved): {cross_batch_targets}")
-
-    # Warn about nodes without source locations (missing metadata)
-    nodes_without_source = [n.id for n in nodes.values() if not n.source]
-    if nodes_without_source:
-        print(f"[mermaid_parser] Warning: {len(nodes_without_source)} node(s) have no source location: {nodes_without_source[:5]}")
+            pass  # Skip edges whose source is not defined
 
     return list(nodes.values()), valid_edges
 
@@ -324,51 +306,3 @@ def parse_flowchart(lines: List[str], metadata: Dict[str, Any]) -> Tuple[List[Gr
 def sanitize_id(name: str) -> str:
     """Convert workflow name to valid ID."""
     return re.sub(r'[^a-z0-9_]', '_', name.lower()).strip('_')
-
-
-# Test with benchmark output
-if __name__ == "__main__":
-    # Test with new deterministic ID format
-    test_response = """flowchart TD
-    %% Workflow: Code Analysis Pipeline
-    main_py__analyze[Receive Request] --> client_py__call_llm([Gemini 2.5 Flash])
-    client_py__call_llm --> main_py__parse__85{Valid?}
-    main_py__parse__85 -->|yes| main_py__respond[Return Result]
-    main_py__parse__85 -->|no| main_py__error[Return Error]
-
----
-metadata:
-main_py__analyze: {file: "main.py", line: 55, function: "analyze", type: "step"}
-client_py__call_llm: {file: "client.py", line: 42, function: "call_llm", type: "llm", model: "gemini-2.5-flash"}
-main_py__parse__85: {file: "main.py", line: 85, function: "parse", type: "decision"}
-main_py__respond: {file: "main.py", line: 110, function: "respond", type: "step"}
-main_py__error: {file: "main.py", line: 120, function: "error", type: "step"}
-"""
-
-    graph = parse_mermaid_response(test_response)
-    print(f"Nodes: {len(graph.nodes)}")
-    for n in graph.nodes:
-        print(f"  {n.id}: {n.label} ({n.type}) - {n.source}")
-    print(f"\nEdges: {len(graph.edges)}")
-    for e in graph.edges:
-        label = f" [{e.label}]" if e.label else ""
-        print(f"  {e.source} -> {e.target}{label}")
-    print(f"\nWorkflows: {len(graph.workflows)}")
-    for w in graph.workflows:
-        print(f"  {w.name}: {w.nodeIds}")
-
-    # Test cross-batch edge (target not in this batch)
-    print("\n--- Test Cross-Batch Edge ---")
-    cross_batch_response = """flowchart TD
-    %% Workflow: Analysis Handler
-    main_py__handler[Receive request] --> gemini_client_py__analyze_workflow
-
----
-metadata:
-main_py__handler: {file: "main.py", line: 10, function: "handler", type: "step"}
-"""
-    graph2 = parse_mermaid_response(cross_batch_response)
-    print(f"Nodes: {len(graph2.nodes)}")
-    print(f"Edges: {len(graph2.edges)}")
-    for e in graph2.edges:
-        print(f"  {e.source} -> {e.target} (cross-batch: {e.target not in [n.id for n in graph2.nodes]})")

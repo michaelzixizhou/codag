@@ -4,12 +4,11 @@
  */
 
 import * as vscode from 'vscode';
-import { APIClient, TrialExhaustedError } from '../api';
-import { AuthManager } from '../auth';
+import { APIClient } from '../api';
 import { CacheManager } from '../cache';
 import { WebviewManager } from '../webview';
 import { withHttpEdges } from './helpers';
-import { setPendingAnalysisTask, setCachedCallGraph } from './state';
+import { setCachedCallGraph } from './state';
 import { extractCallGraph } from '../call-graph-extractor';
 
 /**
@@ -17,7 +16,6 @@ import { extractCallGraph } from '../call-graph-extractor';
  */
 export interface SingleFileContext {
     api: APIClient;
-    auth: AuthManager;
     cache: CacheManager;
     webview: WebviewManager;
     log: (msg: string) => void;
@@ -27,14 +25,21 @@ export interface SingleFileContext {
  * Analyze a single file with LLM and update the graph.
  * Shows cached graph immediately, then updates with new analysis.
  *
- * @param ctx - Context with api, auth, cache, webview, log
+ * @param ctx - Context with api, cache, webview, log
  * @param uri - URI of the file to analyze
  */
 export async function analyzeAndUpdateSingleFile(
     ctx: SingleFileContext,
     uri: vscode.Uri
 ): Promise<void> {
-    const { api, auth, cache, webview, log } = ctx;
+    const { api, cache, webview, log } = ctx;
+
+    // Pre-flight: check backend is reachable (skip silently for background file updates)
+    const healthy = await api.checkHealth();
+    if (!healthy) {
+        log('Backend not reachable — skipping incremental analysis');
+        return;
+    }
 
     try {
         const filePath = vscode.workspace.asRelativePath(uri, false);
@@ -62,9 +67,6 @@ export async function analyzeAndUpdateSingleFile(
         // Analyze single file
         const analyzeResult = await api.analyzeWorkflow(content, [filePath]);
         const result = analyzeResult.graph;
-        if (analyzeResult.remainingAnalyses >= 0) {
-            await auth.updateRemainingAnalyses(analyzeResult.remainingAnalyses);
-        }
 
         if (result && result.nodes && result.nodes.length > 0) {
             // Cache the new result
@@ -104,15 +106,6 @@ export async function analyzeAndUpdateSingleFile(
             log(`Graph updated: empty (${seconds}s)`);
         }
     } catch (error: any) {
-        // Handle trial quota exhaustion - store task for retry after login
-        if (error instanceof TrialExhaustedError) {
-            ctx.log('Trial quota exhausted, showing auth panel...');
-            // Store retry task - note: this creates a closure over ctx and uri
-            setPendingAnalysisTask(() => analyzeAndUpdateSingleFile(ctx, uri));
-            ctx.webview.showAuthPanel();
-            return;
-        }
-
         ctx.log(`ERROR updating file: ${error.message}`);
         ctx.webview.notifyAnalysisComplete(false, error.message);
     }

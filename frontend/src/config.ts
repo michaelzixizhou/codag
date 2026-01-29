@@ -43,14 +43,6 @@ export const CONFIG = {
     },
 
     /**
-     * Trial and auth defaults
-     */
-    TRIAL: {
-        /** Total free analyses available to trial users */
-        TOTAL_ANALYSES: 5,
-    },
-
-    /**
      * Gemini 2.5 Flash pricing (per 1M tokens)
      * Source: https://ai.google.dev/pricing
      */

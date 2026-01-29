@@ -15,7 +15,6 @@ import { setupMessageHandler } from './messages';
 import { updateGroupVisibility, updateComponentVisibility } from './visibility';
 import { detectWorkflowGroups, updateSnapshotStats } from './workflow-detection';
 import { setupDirectory } from './directory';
-import { setupAuthHandlers } from './auth';
 import { notifications } from './notifications';
 import { initTutorial } from './tutorial';
 
@@ -68,9 +67,6 @@ declare function acquireVsCodeApi(): any;
     setupControls();
     setupClosePanel();
     setupDirectory();
-
-    // Setup auth handlers (trial tag, sign-up button, auth panel)
-    setupAuthHandlers();
 
     // Setup onboarding tutorial (shows on first launch)
     initTutorial();

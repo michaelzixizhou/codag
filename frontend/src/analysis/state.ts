@@ -53,26 +53,6 @@ export function incrementAnalysisSession(): number {
 }
 
 // ============================================================================
-// Pending Analysis Task (retry after auth)
-// ============================================================================
-
-let pendingAnalysisTask: (() => Promise<void>) | null = null;
-
-export function getPendingAnalysisTask(): (() => Promise<void>) | null {
-    return pendingAnalysisTask;
-}
-
-export function setPendingAnalysisTask(task: (() => Promise<void>) | null): void {
-    pendingAnalysisTask = task;
-}
-
-export function consumePendingAnalysisTask(): (() => Promise<void>) | null {
-    const task = pendingAnalysisTask;
-    pendingAnalysisTask = null;
-    return task;
-}
-
-// ============================================================================
 // Call Graph Cache (with persistence)
 // ============================================================================
 
@@ -250,7 +230,6 @@ export function resetAllState(): void {
     httpConnections = [];
     crossFileCalls = [];
     analysisSession = 0;
-    pendingAnalysisTask = null;
     cachedCallGraphs.clear();
 
     // Clear all pending change timeouts

@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import * as vscode from 'vscode';
 import {
     SourceLocation,
@@ -8,8 +8,6 @@ import {
     WorkflowGraph,
     LocationMetadata,
     FileMetadata,
-    OAuthUser,
-    DeviceCheckResponse,
     AnalyzeResult,
     FileStructureContext,
     MetadataBundle,
@@ -26,8 +24,6 @@ export {
     WorkflowGraph,
     LocationMetadata,
     FileMetadata,
-    OAuthUser,
-    DeviceCheckResponse,
     AnalyzeResult,
     FileStructureContext,
     MetadataBundle,
@@ -35,20 +31,8 @@ export {
     CostData
 };
 
-/**
- * Custom error for trial quota exhaustion.
- */
-export class TrialExhaustedError extends Error {
-    constructor() {
-        super('Trial quota exhausted');
-        this.name = 'TrialExhaustedError';
-    }
-}
-
 export class APIClient {
     private client: AxiosInstance;
-    private token: string | null = null;
-    private deviceId: string | null = null;
     private outputChannel: vscode.OutputChannel;
     private baseURL: string;
 
@@ -82,64 +66,21 @@ export class APIClient {
     }
 
     /**
-     * Get the base URL for constructing OAuth URLs.
+     * Check if the backend is reachable.
+     * Uses a short timeout so it fails fast.
      */
-    getBaseUrl(): string {
-        return this.baseURL;
-    }
-
-    /**
-     * Set the auth token for authenticated requests.
-     */
-    setToken(token: string): void {
-        this.token = token;
-        this.client.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    }
-
-    /**
-     * Clear the auth token.
-     */
-    clearToken(): void {
-        this.token = null;
-        delete this.client.defaults.headers.common['Authorization'];
-    }
-
-    /**
-     * Set the device ID for trial tracking.
-     */
-    setDeviceId(deviceId: string): void {
-        this.deviceId = deviceId;
-        this.client.defaults.headers.common['X-Device-ID'] = deviceId;
-    }
-
-    /**
-     * Check or register a trial device.
-     */
-    async checkDevice(machineId: string): Promise<DeviceCheckResponse> {
-        const res = await this.client.post('/auth/device', { machine_id: machineId });
-        return res.data;
-    }
-
-    /**
-     * Link a device to an authenticated user.
-     */
-    async linkDevice(machineId: string): Promise<void> {
-        await this.client.post('/auth/device/link', { machine_id: machineId });
-    }
-
-    /**
-     * Get current authenticated user info.
-     * Uses short timeout since this shouldn't block extension activation.
-     */
-    async getUser(): Promise<OAuthUser> {
-        const res = await this.client.get('/auth/me', { timeout: 5000 }); // 5 second timeout
-        return res.data;
+    async checkHealth(): Promise<boolean> {
+        try {
+            await axios.get(`${this.baseURL}/health`, { timeout: 3000 });
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     /**
      * Analyze workflow code.
-     * Returns graph and remaining analyses count.
-     * Throws TrialExhaustedError if trial quota is exhausted.
+     * Returns graph data.
      * @param condensedStructure Optional condensed repo structure for cross-batch context
      */
     async analyzeWorkflow(
@@ -150,73 +91,26 @@ export class APIClient {
         condensedStructure?: string,
         httpConnections?: string
     ): Promise<AnalyzeResult> {
-        try {
-            // If condensed structure provided, prepend it to the code
-            let codeWithContext = code;
-            if (condensedStructure) {
-                codeWithContext = `<workflow_context>\n${condensedStructure}\n</workflow_context>\n\n${code}`;
-            }
-
-            // DEBUG: Log what we're sending to backend
-            console.log(`[DEBUG API] Sending to /analyze:`, {
-                filePaths,
-                codeLength: codeWithContext.length,
-                hasHttpConnections: !!httpConnections,
-                metadataCount: metadata?.length || 0
-            });
-
-            const res = await this.client.post('/analyze', {
-                code: codeWithContext,
-                file_paths: filePaths,
-                framework_hint: frameworkHint,
-                metadata: metadata || [],
-                http_connections: httpConnections
-            });
-
-            // DEBUG: Log what we received
-            const nodeCount = res.data.graph?.nodes?.length || 0;
-            const edgeCount = res.data.graph?.edges?.length || 0;
-            console.log(`[DEBUG API] Response from /analyze: ${nodeCount} nodes, ${edgeCount} edges`);
-            if (nodeCount === 0) {
-                console.log(`[DEBUG API] Empty response for files:`, filePaths);
-            }
-
-            // Extract remaining analyses from response header
-            const remainingHeader = res.headers['x-remaining-analyses'];
-            const remaining = remainingHeader !== undefined
-                ? parseInt(remainingHeader, 10)
-                : -1; // -1 means unlimited (authenticated)
-
-            // Backend now returns { graph, usage, cost }
-            return {
-                graph: res.data.graph,
-                remainingAnalyses: remaining,
-                usage: res.data.usage as TokenUsage | undefined,
-                cost: res.data.cost as CostData | undefined
-            };
-        } catch (error) {
-            if (axios.isAxiosError(error)) {
-                const axiosError = error as AxiosError;
-                if (axiosError.response?.status === 429) {
-                    throw new TrialExhaustedError();
-                }
-            }
-            throw error;
+        // If condensed structure provided, prepend it to the code
+        let codeWithContext = code;
+        if (condensedStructure) {
+            codeWithContext = `<workflow_context>\n${condensedStructure}\n</workflow_context>\n\n${code}`;
         }
-    }
 
-    /**
-     * Legacy method for backwards compatibility.
-     * Use analyzeWorkflow instead to get remaining analyses count.
-     */
-    async analyzeWorkflowLegacy(
-        code: string,
-        filePaths: string[],
-        frameworkHint?: string,
-        metadata?: FileMetadata[]
-    ): Promise<WorkflowGraph> {
-        const result = await this.analyzeWorkflow(code, filePaths, frameworkHint, metadata);
-        return result.graph;
+        const res = await this.client.post('/analyze', {
+            code: codeWithContext,
+            file_paths: filePaths,
+            framework_hint: frameworkHint,
+            metadata: metadata || [],
+            http_connections: httpConnections
+        });
+
+        // Backend returns { graph, usage, cost }
+        return {
+            graph: res.data.graph,
+            usage: res.data.usage as TokenUsage | undefined,
+            cost: res.data.cost as CostData | undefined
+        };
     }
 
     /**

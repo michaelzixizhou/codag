@@ -11,29 +11,21 @@ export class MetadataBuilder {
      * Includes cross-file dependency tracking
      */
     async buildMetadata(workflowFiles: vscode.Uri[]): Promise<FileMetadata[]> {
-        console.log(`\n🔍 buildMetadata: Starting analysis of ${workflowFiles.length} files`);
         const analyses: Map<string, FileAnalysis> = new Map();
 
         // First pass: Analyze all files
-        let fileIndex = 0;
         for (const uri of workflowFiles) {
-            fileIndex++;
             try {
-                console.log(`\n📝 [${fileIndex}/${workflowFiles.length}] Analyzing: ${uri.fsPath}`);
                 const content = await vscode.workspace.fs.readFile(uri);
                 const code = Buffer.from(content).toString('utf8');
                 const analysis = staticAnalyzer.analyze(code, uri.fsPath);
                 analyses.set(uri.fsPath, analysis);
-                console.log(`✓ [${fileIndex}/${workflowFiles.length}] Analyzed: ${uri.fsPath} (${analysis.locations.length} locations)`);
             } catch (error) {
-                console.warn(`⚠️  [${fileIndex}/${workflowFiles.length}] Skipping file (analysis error): ${uri.fsPath}`, error);
+                // Skip files that fail to analyze
             }
         }
 
-        console.log(`\n✅ buildMetadata: Completed first pass, analyzed ${analyses.size} files successfully`);
-
         // Second pass: Build dependency graph
-        console.log(`\n🔗 buildMetadata: Starting second pass (dependency graph)`);
         const metadata: FileMetadata[] = [];
         for (const [filePath, analysis] of analyses.entries()) {
             const relatedFiles = this.findRelatedFiles(analysis, analyses);
@@ -54,7 +46,6 @@ export class MetadataBuilder {
             });
         }
 
-        console.log(`\n✅ buildMetadata: Completed! Returning metadata for ${metadata.length} files`);
         return metadata;
     }
 
@@ -119,7 +110,6 @@ export class MetadataBuilder {
                 relatedFiles: []
             };
         } catch (error) {
-            console.warn(`⚠️  Error building metadata for ${uri.fsPath}, returning empty metadata:`, error);
             return {
                 file: uri.fsPath,
                 locations: [],

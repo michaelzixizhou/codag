@@ -96,7 +96,6 @@ class GeminiClient:
                         match = re.search(r'retry in ([\d.]+)', error_str, re.IGNORECASE)
                         if match:
                             wait_time = float(match.group(1)) / 1000 + 1
-                        print(f"Rate limit hit, waiting {wait_time:.2f}s before retry {attempt + 1}/{max_retries}")
                         await asyncio.sleep(wait_time)
                     else:
                         raise

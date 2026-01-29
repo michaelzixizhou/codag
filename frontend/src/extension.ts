@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { APIClient } from './api';
-import { AuthManager, AuthState, OAuthProvider } from './auth';
 import { CacheManager } from './cache';
 import { WorkflowDetector } from './analyzer';
 import { WebviewManager } from './webview';
@@ -35,7 +34,6 @@ import { combineFilesXML, createDependencyBatches } from './file-preparation';
 import {
     setHttpConnections, setCrossFileCalls, setRepoFiles,
     getAnalysisSession, incrementAnalysisSession,
-    getPendingAnalysisTask, setPendingAnalysisTask, consumePendingAnalysisTask,
     initCallGraphPersistence
 } from './analysis/state';
 
@@ -62,82 +60,11 @@ export async function activate(context: vscode.ExtensionContext) {
     log(`Backend API URL: ${apiUrl}`);
 
     const api = new APIClient(apiUrl, outputChannel);
-    const auth = new AuthManager(context, api);
-    await auth.initialize(); // Load token from secure storage
     const cache = new CacheManager(context);
     const webview = new WebviewManager(context);
 
     // Initialize call graph persistence for instant local updates
     initCallGraphPersistence(context);
-
-    // Register URI handler for OAuth callbacks
-    const uriHandler = vscode.window.registerUriHandler({
-        handleUri(uri: vscode.Uri) {
-            log(`URI Handler received: ${uri.toString()}`);
-            if (uri.path === '/auth/callback') {
-                const params = new URLSearchParams(uri.query);
-                const token = params.get('token');
-                const error = params.get('error');
-
-                if (error) {
-                    auth.handleOAuthError(error);
-                } else if (token) {
-                    auth.handleOAuthCallback(token);
-                }
-            }
-        }
-    });
-    context.subscriptions.push(uriHandler);
-    log('Registered OAuth URI handler (vscode://codag.codag/auth/callback)');
-
-    // Wire up auth state changes to webview
-    auth.setOnAuthStateChange(async (state: AuthState) => {
-        const pendingTask = getPendingAnalysisTask();
-        log(`[auth] State changed: isAuthenticated=${state.isAuthenticated}, isTrial=${state.isTrial}, pendingTask=${!!pendingTask}`);
-        webview.updateAuthState(state);
-
-        // Retry pending task if user just authenticated
-        if (state.isAuthenticated && pendingTask) {
-            log('[auth] User authenticated, retrying blocked analysis...');
-            const task = consumePendingAnalysisTask();
-            if (task) {
-                try {
-                    await task();
-                } catch (error: any) {
-                    log(`[auth] Retry failed: ${error.message}`);
-                }
-            }
-        }
-    });
-
-    // Wire up auth errors to webview
-    auth.setOnAuthError((error: string) => {
-        log(`[auth] Error: ${error}`);
-        webview.showAuthError(error);
-    });
-
-    // Check trial status on activation (validates token with backend) - non-blocking
-    auth.checkTrialStatus().then(remaining => {
-        log(`Trial status: ${remaining} analyses remaining`);
-        webview.updateAuthState(auth.getAuthState());
-    }).catch(err => {
-        log(`Trial status check failed: ${err.message}`);
-    });
-
-    // Handle OAuth start command from webview
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codag.startOAuth', async (provider: OAuthProvider) => {
-            log(`Starting OAuth flow for ${provider}`);
-            await auth.startOAuth(provider);
-        })
-    );
-
-    // Handle logout command
-    context.subscriptions.push(
-        vscode.commands.registerCommand('codag.logout', async () => {
-            await auth.logout();
-        })
-    );
 
     // Register Copilot integrations (dual approach for reliability)
 
@@ -267,7 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // File watching configuration
     // Shared context for analysis operations
-    const analysisCtx = { api, auth, cache, webview, log };
+    const analysisCtx = { api, cache, webview, log };
     const workspaceCtx = { ...analysisCtx, metadataBuilder, extensionContext: context };
 
     // Wrapper for single file analysis that includes context
@@ -547,10 +474,6 @@ export async function activate(context: vscode.ExtensionContext) {
                         }
 
                         const batchGraph = batchResult.graph;
-
-                        if (batchResult.remainingAnalyses >= 0) {
-                            await auth.updateRemainingAnalyses(batchResult.remainingAnalyses);
-                        }
 
                         newGraphs.push(batchGraph);
 

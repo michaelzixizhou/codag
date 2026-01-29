@@ -4,8 +4,6 @@ import * as path from 'path';
 import { WorkflowGraph } from './api';
 import { ViewState } from './copilot/types';
 import { FileTreeNode } from './file-picker';
-import { AuthState, OAuthProvider } from './auth';
-
 export interface LoadingOptions {
     loading?: boolean;
     progress?: { current: number; total: number };
@@ -19,7 +17,6 @@ export class WebviewManager {
         lastUpdated: Date.now()
     };
     private filePickerResolver: ((paths: string[] | null) => void) | null = null;
-    private currentAuthState: AuthState | null = null;  // Track current auth state for re-sending after HTML replacement
     private pendingMessages: any[] = [];
     private webviewReady = false;
 
@@ -110,6 +107,10 @@ export class WebviewManager {
             command: 'warning',
             message
         });
+    }
+
+    notifyBackendError() {
+        this.postMessage({ command: 'backendError' });
     }
 
     /**
@@ -228,12 +229,8 @@ export class WebviewManager {
                 } else if (message.command === 'clearCacheAndReanalyze') {
                     // Clear cache for selected files and reanalyze them
                     vscode.commands.executeCommand('codag.clearCacheAndReanalyze', message.paths);
-                } else if (message.command === 'startOAuth') {
-                    // Start OAuth flow for specified provider
-                    const provider = message.provider as OAuthProvider;
-                    vscode.commands.executeCommand('codag.startOAuth', provider);
-                } else if (message.command === 'logout') {
-                    vscode.commands.executeCommand('codag.logout');
+                } else if (message.command === 'retryAnalysis') {
+                    vscode.commands.executeCommand('codag.open');
                 } else if (message.command === 'webviewReady') {
                     // Webview is ready to receive messages
                     this.onWebviewReady();
@@ -242,48 +239,6 @@ export class WebviewManager {
             undefined,
             this.context.subscriptions
         );
-    }
-
-    /**
-     * Update auth state in webview (trial tag, sign-up button visibility)
-     */
-    updateAuthState(state: AuthState) {
-        console.log('[webview] updateAuthState called: panel=', !!this.panel, 'isAuthenticated=', state.isAuthenticated, 'hasUser=', !!state.user);
-        // Always track current auth state so we can re-send after HTML replacement
-        this.currentAuthState = state;
-        if (this.panel) {
-            this.postMessage({
-                command: 'updateAuthState',
-                authState: state
-            });
-        }
-    }
-
-    /**
-     * Send current auth state to webview (called after HTML replacement)
-     */
-    private sendCurrentAuthState() {
-        if (this.currentAuthState && this.panel) {
-            console.log('[webview] Sending auth state after HTML replacement:', this.currentAuthState.isAuthenticated);
-            this.postMessage({
-                command: 'updateAuthState',
-                authState: this.currentAuthState
-            });
-        }
-    }
-
-    /**
-     * Show the auth panel (called when trial is exhausted)
-     */
-    showAuthPanel() {
-        this.postMessage({ command: 'showAuthPanel' });
-    }
-
-    /**
-     * Show auth error in the webview notification
-     */
-    showAuthError(error: string) {
-        this.postMessage({ command: 'authError', error });
     }
 
     /**
@@ -330,8 +285,6 @@ export class WebviewManager {
             this.resetWebviewState();
             this.panel.webview.html = this.getHtml({ nodes: [], edges: [], llms_detected: [], workflows: [] });
 
-            // Send queued auth state
-            this.sendCurrentAuthState();
         } else {
             this.panel.reveal();
         }
@@ -383,8 +336,6 @@ export class WebviewManager {
             this.resetWebviewState();
             this.panel.webview.html = this.getHtml({ nodes: [], edges: [], llms_detected: [], workflows: [] });
 
-            // Send queued auth state
-            this.sendCurrentAuthState();
         } else {
             this.panel.reveal();
         }
@@ -526,8 +477,6 @@ export class WebviewManager {
         this.resetWebviewState();
         this.panel.webview.html = this.getHtml(graph, loadingOptions);
 
-        // Send queued auth state AFTER reset (will be queued until webviewReady)
-        this.sendCurrentAuthState();
     }
 
     private getHtml(graph: WorkflowGraph, loadingOptions?: LoadingOptions): string {

@@ -47,6 +47,10 @@ Thumbs.db
 *.swo
 *~
 
+# Claude Code
+.claude/
+CLAUDE.md
+
 # Cache directories
 .codag-cache/
 .cache/
