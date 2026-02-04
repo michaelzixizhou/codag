@@ -271,6 +271,56 @@ body {
     .edge-tooltip { font-size: 9px; padding: 5px; max-width: 180px; }
     .button-tooltip { font-size: 8px; padding: 2px 5px; }
 }
+
+/* Export Dropdown */
+.export-dropdown {
+    position: fixed;
+    background: var(--vscode-menu-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    z-index: 10002;
+    min-width: 180px;
+    padding: 4px;
+    display: none;
+}
+.export-dropdown.visible {
+    display: block;
+}
+.export-dropdown-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    width: 100%;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    gap: 4px;
+}
+.export-dropdown-item:hover {
+    background: var(--vscode-list-hoverBackground);
+}
+.export-dropdown-icon {
+    margin-right: 4px;
+    font-size: 14px;
+}
+.export-dropdown-hint {
+    width: 100%;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    padding-left: 22px;
+    margin-top: -2px;
+}
+.workflow-export-menu {
+    position: fixed;
+}
+
 /* Notification Queue */
 .notification-queue {
     position: fixed;

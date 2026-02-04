@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/logo.png" alt="Codag" width="128" />
+<img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/media/logo.png" alt="Codag" width="128" />
 
 # Codag
 
@@ -11,7 +11,24 @@
 Codag analyzes your code for LLM API calls and AI frameworks, then generates interactive workflow graphs — directly inside VSCode.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/demo.gif" alt="Codag in action" width="800" />
+  <img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/media/demo.gif" alt="Codag in action" width="800" />
+</p>
+
+### Gallery
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/media/aichatbot.png" alt="Vercel AI Chatbot" width="800" /><br/>
+  <em>Vercel AI Chatbot</em>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/media/langchain.png" alt="LangChain" width="800" /><br/>
+  <em>LangChain</em>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/michaelzixizhou/codag/main/media/trycua.png" alt="TryCua" width="800" /><br/>
+  <em>TryCua</em>
 </p>
 
 ## Why Codag?

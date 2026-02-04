@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="logo.png" alt="Codag" width="128" />
+<img src="media/logo.png" alt="Codag" width="128" />
 
 # Codag
 
@@ -19,11 +19,28 @@ Codag analyzes your code for LLM API calls and AI frameworks, then generates int
 <br/>
 
 <p align="center">
-  <img src="demo.gif" alt="Codag in action" width="800" />
+  <img src="media/demo.gif" alt="Codag in action" width="800" />
 </p>
 
 <p align="center">
   <strong>If you find Codag useful, please consider giving it a ⭐ — it helps others discover the project!</strong>
+</p>
+
+### Gallery
+
+<p align="center">
+  <img src="media/aichatbot.png" alt="Vercel AI Chatbot" width="800" /><br/>
+  <em>Vercel AI Chatbot</em>
+</p>
+
+<p align="center">
+  <img src="media/langchain.png" alt="LangChain" width="800" /><br/>
+  <em>LangChain</em>
+</p>
+
+<p align="center">
+  <img src="media/trycua.png" alt="TryCua" width="800" /><br/>
+  <em>TryCua</em>
 </p>
 
 ## Why Codag?

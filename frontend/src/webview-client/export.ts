@@ -140,6 +140,31 @@ function extractHyphenatedLines(element: HTMLElement): string[] {
 }
 
 /**
+ * Calculate text scale factor for large graphs
+ * Scales down text when there are many nodes to keep export readable
+ */
+function calculateTextScale(nodeCount: number, width: number, height: number): number {
+    // Base thresholds
+    const IDEAL_AREA_PER_NODE = 40000; // ~200x200 pixels per node is comfortable
+    const MIN_SCALE = 0.5;  // Don't go below 50% size
+    const MAX_SCALE = 1.0;  // Never scale up
+
+    const totalArea = width * height;
+    const areaPerNode = totalArea / Math.max(nodeCount, 1);
+
+    // If area per node is less than ideal, scale down
+    if (areaPerNode >= IDEAL_AREA_PER_NODE) {
+        return MAX_SCALE;
+    }
+
+    // Scale proportionally to sqrt of ratio (gentler scaling)
+    const ratio = areaPerNode / IDEAL_AREA_PER_NODE;
+    const scale = Math.sqrt(ratio);
+
+    return Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
+}
+
+/**
  * Build SVG for export from scratch, reading positions from DOM
  */
 function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number; maxY: number }, groupId?: string): SVGSVGElement {
@@ -147,6 +172,12 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
 
     const width = bounds.maxX - bounds.minX;
     const height = bounds.maxY - bounds.minY;
+
+    // Calculate text scale for large graphs
+    const visibleNodeCount = groupId
+        ? (workflowGroups.find((g: any) => g.id === groupId)?.nodes.length || 0)
+        : currentGraphData.nodes.filter((n: any) => n.type !== 'workflow-title').length;
+    const textScale = calculateTextScale(visibleNodeCount, width, height);
 
     // Resolve common colors once
     const bgColor = resolveCSSVariable('var(--vscode-editor-background)') || '#1e1e1e';
@@ -245,12 +276,15 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
         const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         g.setAttribute('transform', transform);
 
-        // Get actual text width from DOM for accurate sizing
+        // Get actual text width from DOM for accurate sizing, apply scale
         const bgEl = labelEl.querySelector('.edge-label-bg') as SVGRectElement;
-        const rectWidth = bgEl ? parseFloat(bgEl.getAttribute('width') || '0') : textContent.length * 7 + 16;
-        const rectHeight = bgEl ? parseFloat(bgEl.getAttribute('height') || '0') : 20;
-        const rectX = bgEl ? parseFloat(bgEl.getAttribute('x') || '0') : -rectWidth / 2;
-        const rectY = bgEl ? parseFloat(bgEl.getAttribute('y') || '0') : -10;
+        const baseRectWidth = bgEl ? parseFloat(bgEl.getAttribute('width') || '0') : textContent.length * 7 + 16;
+        const baseRectHeight = bgEl ? parseFloat(bgEl.getAttribute('height') || '0') : 20;
+        const rectWidth = baseRectWidth * textScale;
+        const rectHeight = baseRectHeight * textScale;
+        const rectX = -rectWidth / 2;
+        const rectY = -rectHeight / 2;
+        const edgeFontSize = 11 * textScale;
 
         // Background pill
         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -258,7 +292,7 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
         rect.setAttribute('y', String(rectY));
         rect.setAttribute('width', String(rectWidth));
         rect.setAttribute('height', String(rectHeight));
-        rect.setAttribute('rx', '3');
+        rect.setAttribute('rx', String(3 * textScale));
         rect.setAttribute('fill', bgColor);
         rect.setAttribute('stroke', borderColor);
         rect.setAttribute('stroke-width', '1');
@@ -270,7 +304,7 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
         text.setAttribute('dominant-baseline', 'middle');
         text.setAttribute('fill', fgColor);
         text.setAttribute('font-family', '"DM Sans", "Inter", "Segoe UI", sans-serif');
-        text.setAttribute('font-size', '11px');
+        text.setAttribute('font-size', `${edgeFontSize}px`);
         text.textContent = textContent;
         g.appendChild(text);
 
@@ -399,7 +433,9 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
         const labelText = nodeData.label;
 
         if (labelText) {
-            const fontSize = nodeData.type === 'workflow-title' ? 16 : 15;
+            // Apply text scale for large graphs
+            const baseFontSize = nodeData.type === 'workflow-title' ? 16 : 15;
+            const fontSize = baseFontSize * textScale;
             const fontWeight = nodeData.type === 'workflow-title' ? '600' : '400';
 
             // Extract hyphenated lines from the actual rendered DOM element
@@ -445,10 +481,12 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     return svg;
 }
 
+type ImageFormat = 'png' | 'jpeg';
+
 /**
- * Convert SVG to PNG using canvas
+ * Convert SVG to image (PNG or JPEG) using canvas
  */
-async function svgToPNG(svg: SVGSVGElement, scale: number = 2): Promise<Blob> {
+async function svgToImage(svg: SVGSVGElement, format: ImageFormat, scale: number = 2): Promise<Blob> {
     const width = parseInt(svg.getAttribute('width') || '800');
     const height = parseInt(svg.getAttribute('height') || '600');
 
@@ -458,6 +496,9 @@ async function svgToPNG(svg: SVGSVGElement, scale: number = 2): Promise<Blob> {
     // Use base64 encoding instead of URL encoding
     const base64Svg = btoa(unescape(encodeURIComponent(svgString)));
     const dataUrl = `data:image/svg+xml;base64,${base64Svg}`;
+
+    // Get background color for JPEG (JPEG doesn't support transparency)
+    const bgColor = resolveCSSVariable('var(--vscode-editor-background)') || '#1e1e1e';
 
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -479,18 +520,27 @@ async function svgToPNG(svg: SVGSVGElement, scale: number = 2): Promise<Blob> {
             // Scale for higher resolution
             ctx.scale(scale, scale);
 
+            // For JPEG, fill background first (JPEG doesn't support transparency)
+            if (format === 'jpeg') {
+                ctx.fillStyle = bgColor;
+                ctx.fillRect(0, 0, width, height);
+            }
+
             // Draw the image
             ctx.drawImage(img, 0, 0, width, height);
 
             // Convert to blob - wrap in try-catch for tainted canvas
+            const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png';
+            const quality = format === 'jpeg' ? 0.95 : undefined;
+
             try {
                 canvas.toBlob((blob) => {
                     if (blob) {
                         resolve(blob);
                     } else {
-                        reject(new Error('Failed to create PNG blob'));
+                        reject(new Error(`Failed to create ${format.toUpperCase()} blob`));
                     }
-                }, 'image/png');
+                }, mimeType, quality);
             } catch (e) {
                 reject(new Error('Canvas export failed - the graph may contain external resources'));
             }
@@ -571,10 +621,32 @@ export async function exportAllAsPNG(): Promise<void> {
         }
 
         const svg = prepareSVGForExport(bounds);
-        const blob = await svgToPNG(svg, 2);
+        const blob = await svgToImage(svg, 'png', 2);
 
         const timestamp = new Date().toISOString().slice(0, 10);
         await saveBlob(blob, `codag-workflow-${timestamp}.png`);
+    } catch (error) {
+        console.error('Export failed:', error);
+        showExportNotification('Export failed: ' + (error as Error).message, true);
+    }
+}
+
+/**
+ * Export the entire graph as JPEG with editor background color
+ */
+export async function exportAllAsJPEG(): Promise<void> {
+    try {
+        const bounds = getExportBounds();
+        if (!bounds) {
+            showExportNotification('No graph content to export', true);
+            return;
+        }
+
+        const svg = prepareSVGForExport(bounds);
+        const blob = await svgToImage(svg, 'jpeg', 2);
+
+        const timestamp = new Date().toISOString().slice(0, 10);
+        await saveBlob(blob, `codag-workflow-${timestamp}.jpg`);
     } catch (error) {
         console.error('Export failed:', error);
         showExportNotification('Export failed: ' + (error as Error).message, true);
@@ -593,7 +665,7 @@ export async function exportWorkflowAsPNG(groupId: string, groupName: string): P
         }
 
         const svg = prepareSVGForExport(bounds, groupId);
-        const blob = await svgToPNG(svg, 2);
+        const blob = await svgToImage(svg, 'png', 2);
 
         // Sanitize filename
         const safeName = groupName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
@@ -605,10 +677,81 @@ export async function exportWorkflowAsPNG(groupId: string, groupName: string): P
 }
 
 /**
- * Setup global export button
+ * Export a specific workflow group as JPEG with editor background color
+ */
+export async function exportWorkflowAsJPEG(groupId: string, groupName: string): Promise<void> {
+    try {
+        const bounds = getExportBounds(groupId);
+        if (!bounds) {
+            showExportNotification('Workflow not found', true);
+            return;
+        }
+
+        const svg = prepareSVGForExport(bounds, groupId);
+        const blob = await svgToImage(svg, 'jpeg', 2);
+
+        // Sanitize filename
+        const safeName = groupName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+        await saveBlob(blob, `codag-${safeName}.jpg`);
+    } catch (error) {
+        console.error('Export failed:', error);
+        showExportNotification('Export failed: ' + (error as Error).message, true);
+    }
+}
+
+/**
+ * Setup global export button with format dropdown
  */
 export function setupExportButton(): void {
-    document.getElementById('btn-export')?.addEventListener('click', exportAllAsPNG);
+    const exportBtn = document.getElementById('btn-export');
+    if (!exportBtn) return;
+
+    // Create dropdown menu
+    const dropdown = document.createElement('div');
+    dropdown.className = 'export-dropdown';
+    dropdown.innerHTML = `
+        <button class="export-dropdown-item" data-format="png">
+            <span class="export-dropdown-icon">📷</span>
+            Export as PNG
+            <span class="export-dropdown-hint">Transparent background</span>
+        </button>
+        <button class="export-dropdown-item" data-format="jpeg">
+            <span class="export-dropdown-icon">🖼️</span>
+            Export as JPEG
+            <span class="export-dropdown-hint">With background color</span>
+        </button>
+    `;
+    document.body.appendChild(dropdown);
+
+    // Position and show dropdown on click
+    exportBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rect = exportBtn.getBoundingClientRect();
+        dropdown.style.top = `${rect.bottom + 4}px`;
+        dropdown.style.right = `${window.innerWidth - rect.right}px`;
+        dropdown.classList.toggle('visible');
+    });
+
+    // Handle format selection
+    dropdown.addEventListener('click', async (e) => {
+        const target = e.target as HTMLElement;
+        const item = target.closest('.export-dropdown-item') as HTMLElement;
+        if (!item) return;
+
+        dropdown.classList.remove('visible');
+        const format = item.dataset.format;
+
+        if (format === 'png') {
+            await exportAllAsPNG();
+        } else if (format === 'jpeg') {
+            await exportAllAsJPEG();
+        }
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', () => {
+        dropdown.classList.remove('visible');
+    });
 }
 
 /**
@@ -658,9 +801,10 @@ export function addWorkflowExportButtons(): void {
             .attr('class', 'workflow-export-btn')
             .attr('transform', `translate(${btnX}, ${btnY})`)
             .style('cursor', 'pointer')
-            .on('click', (event: Event) => {
+            .on('click', (event: MouseEvent) => {
                 event.stopPropagation();
-                exportWorkflowAsPNG(group.id, group.name);
+                // Show format selection menu at click position
+                showWorkflowExportMenu(event.clientX, event.clientY, group.id, group.name);
             })
             // Maintain parent hover state when hovering export button
             .on('mouseenter', () => {
@@ -672,7 +816,7 @@ export function addWorkflowExportButtons(): void {
 
         // Tooltip on hover
         btnGroup.append('title')
-            .text('Export workflow as PNG');
+            .text('Export workflow');
 
         // Button background circle
         btnGroup.append('circle')
@@ -691,4 +835,55 @@ export function addWorkflowExportButtons(): void {
             .attr('stroke-linecap', 'round')
             .attr('fill', 'none');
     });
+}
+
+/**
+ * Show workflow export context menu with format options
+ */
+export function showWorkflowExportMenu(x: number, y: number, groupId: string, groupName: string): void {
+    // Remove any existing menu
+    document.querySelector('.workflow-export-menu')?.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'workflow-export-menu export-dropdown visible';
+    menu.innerHTML = `
+        <button class="export-dropdown-item" data-format="png">
+            <span class="export-dropdown-icon">📷</span>
+            Export as PNG
+        </button>
+        <button class="export-dropdown-item" data-format="jpeg">
+            <span class="export-dropdown-icon">🖼️</span>
+            Export as JPEG
+        </button>
+    `;
+    menu.style.top = `${y}px`;
+    menu.style.left = `${x}px`;
+    menu.style.right = 'auto';
+    document.body.appendChild(menu);
+
+    // Handle format selection
+    menu.addEventListener('click', async (e) => {
+        const target = e.target as HTMLElement;
+        const item = target.closest('.export-dropdown-item') as HTMLElement;
+        if (!item) return;
+
+        menu.remove();
+        const format = item.dataset.format;
+
+        if (format === 'png') {
+            await exportWorkflowAsPNG(groupId, groupName);
+        } else if (format === 'jpeg') {
+            await exportWorkflowAsJPEG(groupId, groupName);
+        }
+    });
+
+    // Close on outside click
+    const closeHandler = (e: MouseEvent) => {
+        if (!menu.contains(e.target as Node)) {
+            menu.remove();
+            document.removeEventListener('click', closeHandler);
+        }
+    };
+    // Delay to prevent immediate close
+    setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }

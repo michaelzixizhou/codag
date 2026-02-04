@@ -260,22 +260,35 @@ export class WebviewManager {
                     // Webview is ready to receive messages
                     this.onWebviewReady();
                 } else if (message.command === 'saveExport') {
-                    // Handle PNG export save dialog
+                    // Handle export save dialog with remembered folder
                     try {
                         const os = require('os');
                         const path = require('path');
                         const fs = require('fs');
-                        const desktopPath = path.join(os.homedir(), 'Desktop', message.suggestedName);
+
+                        // Get last export folder or default to Desktop
+                        const lastExportFolder = this.context.globalState.get<string>('lastExportFolder')
+                            || path.join(os.homedir(), 'Desktop');
+                        const defaultPath = path.join(lastExportFolder, message.suggestedName);
+
+                        // Determine file type from suggested name
+                        const isJpeg = message.suggestedName.endsWith('.jpg') || message.suggestedName.endsWith('.jpeg');
+                        const filters = isJpeg
+                            ? { 'JPEG Images': ['jpg', 'jpeg'] }
+                            : { 'PNG Images': ['png'] };
 
                         const uri = await vscode.window.showSaveDialog({
-                            defaultUri: vscode.Uri.file(desktopPath),
-                            filters: { 'PNG Images': ['png'] },
+                            defaultUri: vscode.Uri.file(defaultPath),
+                            filters,
                             saveLabel: 'Export'
                         });
 
                         if (uri) {
-                            // Decode base64 and write to file using Node.js fs
-                            // This is more reliable for overwriting files on macOS
+                            // Remember the folder for next time
+                            const savedFolder = path.dirname(uri.fsPath);
+                            this.context.globalState.update('lastExportFolder', savedFolder);
+
+                            // Decode base64 and write to file
                             const buffer = Buffer.from(message.data, 'base64');
                             fs.writeFileSync(uri.fsPath, buffer);
                             this.postMessage({ command: 'exportSuccess', path: uri.fsPath });
