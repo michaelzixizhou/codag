@@ -29,6 +29,7 @@ Codag does this automatically:
 - **Automatic Workflow Detection** — point at your files, get a full AI pipeline graph
 - **Live Graph Updates** — edit code, watch the graph change with green highlights on changed functions
 - **Click-to-Source** — every node links to the exact function and line number
+- **Export to PNG** — export workflow graphs as high-resolution images
 ## Supported Providers
 
 **LLM Providers:** OpenAI, Anthropic, Google Gemini, Azure OpenAI, Vertex AI, AWS Bedrock, Mistral, xAI (Grok), Cohere, Ollama, Together AI, Replicate, Fireworks AI, AI21, DeepSeek, OpenRouter, Groq, Hugging Face
