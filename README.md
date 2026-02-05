@@ -182,6 +182,16 @@ cursor --install-extension codag-*.vsix
 
 Have a feature request? [Open an issue](https://github.com/michaelzixizhou/codag/issues/new).
 
+## Star History
+
+<a href="https://star-history.com/#michaelzixizhou/codag&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=michaelzixizhou/codag&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=michaelzixizhou/codag&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=michaelzixizhou/codag&type=Date" />
+ </picture>
+</a>
+
 ## Development
 
 For contributors working on the extension itself:
