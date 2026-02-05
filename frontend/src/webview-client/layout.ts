@@ -53,6 +53,132 @@ export async function layoutWorkflows(defs: any): Promise<void> {
 
     const layoutData: WorkflowLayoutData[] = [];
 
+    // ========== PASS 0: Measure ALL nodes first ==========
+    // This ensures every node has proper dimensions, even if workflow is skipped
+    currentGraphData.nodes.forEach((node: any) => {
+        const isTitleNode = node.type === 'workflow-title';
+        const measureOptions = isTitleNode ? {
+            fontSize: '16px',
+            fontWeight: '600',
+            minWidth: 100,
+            maxWidth: 280,
+            horizontalPadding: 24,  // More padding for pill shape
+            verticalPadding: 16
+        } : undefined;
+
+        const dims = measureNodeDimensions(node.label || node.id, measureOptions);
+        // Store original text area dimensions for foreignObject
+        node._textWidth = dims.width;
+        node._textHeight = dims.height;
+        // Decision nodes use hexagon shape - add width for the pointed ends
+        if (node.type === 'decision') {
+            node.width = dims.width * 1.2;
+            node.height = dims.height;
+        } else {
+            node.width = dims.width;
+            node.height = dims.height;
+        }
+    });
+
+    // ========== PASS 0.5: Test render to detect overflow, fix heights ==========
+    // Wait for fonts to load before measuring (DM Sans affects text metrics)
+    if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+    }
+
+    // Create temp foreignObjects matching actual render structure to detect overflow
+    const svg = d3.select('svg');
+    if (!svg.empty()) {
+        const testGroup = svg.append('g')
+            .attr('class', 'overflow-test-temp')
+            .attr('transform', 'translate(-5000, -5000)');
+
+        currentGraphData.nodes.forEach((node: any) => {
+            const isTitleNode = node.type === 'workflow-title';
+            const fontSize = isTitleNode ? '16px' : '15px';
+            const fontWeight = isTitleNode ? '600' : '400';
+            const vPadding = isTitleNode ? 16 : 12;
+            const foWidth = node._textWidth - 8;
+            const foHeight = node._textHeight - 8;
+
+            // Create foreignObject matching nodes.ts structure exactly
+            const fo = testGroup.append('foreignObject')
+                .attr('width', foWidth)
+                .attr('height', foHeight);
+
+            const wrapper = fo.append('xhtml:div')
+                .attr('xmlns', 'http://www.w3.org/1999/xhtml')
+                .style('width', '100%')
+                .style('height', '100%')
+                .style('display', 'flex')
+                .style('align-items', 'center')
+                .style('justify-content', 'center');
+
+            const span = wrapper.append('xhtml:span')
+                .attr('xmlns', 'http://www.w3.org/1999/xhtml')
+                .attr('lang', 'en')
+                .style('display', 'block')
+                .style('width', '100%')
+                .style('text-align', 'center')
+                .style('font-family', '"DM Sans", "Inter", "Segoe UI", -apple-system, sans-serif')
+                .style('font-size', fontSize)
+                .style('font-weight', fontWeight)
+                .style('letter-spacing', '-0.01em')
+                .style('line-height', '1.2')
+                .style('word-break', 'break-word')
+                .style('word-wrap', 'break-word')
+                .style('overflow-wrap', 'break-word')
+                .style('hyphens', 'auto')
+                .style('-webkit-hyphens', 'auto')
+                .text(node.label || node.id);
+
+            // Force layout
+            const spanEl = span.node() as HTMLElement;
+            void spanEl.offsetHeight;
+
+            // Check for overflow
+            const actualHeight = spanEl.offsetHeight;
+            if (actualHeight > foHeight) {
+                const hPadding = isTitleNode ? 24 : 16;
+
+                // Binary search for minimum width that maintains same height
+                // (tightest width that doesn't add more lines)
+                let lo = 50;
+                let hi = foWidth;
+                let optimalWidth = foWidth;
+
+                while (lo <= hi) {
+                    const mid = Math.floor((lo + hi) / 2);
+                    fo.attr('width', mid);
+                    void spanEl.offsetHeight;
+
+                    const testHeight = spanEl.offsetHeight;
+                    if (testHeight <= actualHeight) {
+                        // Still fits in same number of lines, try smaller
+                        optimalWidth = mid;
+                        hi = mid - 1;
+                    } else {
+                        // Wrapped to more lines, need more width
+                        lo = mid + 1;
+                    }
+                }
+
+                const newWidth = optimalWidth + hPadding;
+                const newHeight = actualHeight + vPadding;
+
+                node.width = node.type === 'decision' ? newWidth * 1.2 : newWidth;
+                node._textWidth = newWidth;
+                node.height = newHeight;
+                node._textHeight = newHeight;
+
+            }
+
+            fo.remove();
+        });
+
+        testGroup.remove();
+    }
+
     // ========== PASS 1: Layout each workflow individually with ELK ==========
     // All nodes are laid out normally - components don't affect layout
     for (const group of workflowGroups) {
@@ -68,34 +194,10 @@ export async function layoutWorkflows(defs: any): Promise<void> {
         const elkNodes: NodeInput[] = [];
 
         allGroupNodes.forEach((node: any) => {
-            // Title nodes use larger font
-            const isTitleNode = node.type === 'workflow-title';
-            const measureOptions = isTitleNode ? {
-                fontSize: '16px',
-                fontWeight: '600',
-                minWidth: 100,
-                maxWidth: 280,
-                horizontalPadding: 24,  // More padding for pill shape
-                verticalPadding: 16
-            } : undefined;
-
-            const dims = measureNodeDimensions(node.label || node.id, measureOptions);
-            // Store original text area dimensions for foreignObject
-            node._textWidth = dims.width;
-            node._textHeight = dims.height;
-            // Decision nodes use hexagon shape - add slight width for the pointed ends
-            if (node.type === 'decision') {
-                node.width = dims.width * 1.08;  // Extra width for hexagon points (reduced for smaller indent)
-                node.height = dims.height;
-            } else {
-                node.width = dims.width;
-                node.height = dims.height;
-            }
-
             const elkNode: NodeInput = { id: node.id, width: node.width, height: node.height };
 
             // Force title nodes to the first layer so they appear at the top
-            if (isTitleNode) {
+            if (node.type === 'workflow-title') {
                 elkNode.layoutOptions = {
                     'elk.layering.layerConstraint': 'FIRST',
                     'elk.priority': '100'

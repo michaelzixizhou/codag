@@ -53,9 +53,45 @@ export class WebviewManager {
     /**
      * Flush pending messages and mark webview as ready
      */
-    private onWebviewReady() {
+    private async onWebviewReady() {
         console.log('[webview] onWebviewReady: flushing', this.pendingMessages.length, 'messages');
         this.webviewReady = true;
+
+        // Send workspace name for export watermark (try git remote first for org/repo format)
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (workspaceFolders && workspaceFolders.length > 0) {
+            const workspaceRoot = workspaceFolders[0].uri.fsPath;
+            let repoName = workspaceFolders[0].name; // Fallback to folder name
+
+            // Try to get org/repo from git remote
+            try {
+                const { execSync } = require('child_process');
+                const remoteUrl = execSync('git remote get-url origin', {
+                    cwd: workspaceRoot,
+                    encoding: 'utf8',
+                    timeout: 2000
+                }).trim();
+
+                // Parse org/repo from various URL formats:
+                // https://github.com/org/repo.git
+                // git@github.com:org/repo.git
+                // https://github.com/org/repo
+                const match = remoteUrl.match(/[:/]([^/]+)\/([^/]+?)(\.git)?$/);
+                if (match) {
+                    const org = match[1];
+                    const repo = match[2];
+                    repoName = `${org}/${repo}`;
+                }
+            } catch (e) {
+                // Not a git repo or no remote, use folder name
+            }
+
+            this.panel?.webview.postMessage({
+                command: 'setWorkspaceName',
+                name: repoName
+            });
+        }
+
         this.pendingMessages.forEach(msg => {
             console.log('[webview] Sending queued message:', msg.command);
             this.panel?.webview.postMessage(msg);

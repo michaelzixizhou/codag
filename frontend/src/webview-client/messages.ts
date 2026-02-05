@@ -86,6 +86,10 @@ export function setupMessageHandler(): void {
                 }
                 break;
 
+            case 'setWorkspaceName':
+                state.setWorkspaceName(message.name || '');
+                break;
+
             case 'hideProgressOverlay':
                 const progressOverlay = document.getElementById('progressOverlay');
                 if (progressOverlay) progressOverlay.style.display = 'none';

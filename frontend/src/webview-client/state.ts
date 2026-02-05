@@ -61,6 +61,9 @@ export let finePatternDot: any = null;
 export let coarsePatternDot: any = null;
 export let pegboardBg: any = null;
 
+// Workspace name for exports
+export let workspaceName: string = '';
+
 // Initialize core state
 export function initState(
     vs: any,
@@ -203,4 +206,14 @@ export function setElkLabelPositions(positions: Map<string, { x: number; y: numb
 // Get ELK label position for an edge
 export function getElkLabelPosition(edgeId: string): { x: number; y: number } | undefined {
     return elkLabelPositions.get(edgeId);
+}
+
+// Set workspace name
+export function setWorkspaceName(name: string): void {
+    workspaceName = name;
+}
+
+// Get workspace name
+export function getWorkspaceName(): string {
+    return workspaceName;
 }

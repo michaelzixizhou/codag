@@ -171,13 +171,15 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     const { workflowGroups, currentGraphData } = state;
 
     const width = bounds.maxX - bounds.minX;
-    const height = bounds.maxY - bounds.minY;
+    const contentHeight = bounds.maxY - bounds.minY;
+    const badgeAreaHeight = 80; // Space for the badge at bottom (16px top + 48px badge + 16px bottom)
+    const totalHeight = contentHeight + badgeAreaHeight;
 
     // Calculate text scale for large graphs
     const visibleNodeCount = groupId
         ? (workflowGroups.find((g: any) => g.id === groupId)?.nodes.length || 0)
         : currentGraphData.nodes.filter((n: any) => n.type !== 'workflow-title').length;
-    const textScale = calculateTextScale(visibleNodeCount, width, height);
+    const textScale = calculateTextScale(visibleNodeCount, width, contentHeight);
 
     // Resolve common colors once
     const bgColor = resolveCSSVariable('var(--vscode-editor-background)') || '#1e1e1e';
@@ -185,12 +187,12 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     const borderColor = resolveCSSVariable('var(--vscode-editorWidget-border)') || '#454545';
     const descriptionFgColor = resolveCSSVariable('var(--vscode-descriptionForeground)') || '#858585';
 
-    // Create SVG
+    // Create SVG with extra height for footer
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     svg.setAttribute('width', String(width));
-    svg.setAttribute('height', String(height));
-    svg.setAttribute('viewBox', `${bounds.minX} ${bounds.minY} ${width} ${height}`);
+    svg.setAttribute('height', String(totalHeight));
+    svg.setAttribute('viewBox', `${bounds.minX} ${bounds.minY} ${width} ${totalHeight}`);
 
     // Defs with arrow marker - match webview exactly (setup.ts)
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
@@ -478,7 +480,124 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     });
 
     svg.appendChild(mainGroup);
+
+    // Add watermark badge with logo and codebase name (bottom left)
+    // Fixed size - not proportional to graph, but to image resolution
+    const badgeHeight = 48;
+    const badgePadding = 14;
+    const logoDisplayWidth = 120;  // Fixed logo width in badge
+    const logoDisplayHeight = 32;  // Fixed logo height in badge
+    const repoFontSize = 18;
+    const workspaceName = getWorkspaceName();
+
+    // Calculate badge width based on content
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    let textWidth = 0;
+    if (ctx && workspaceName) {
+        ctx.font = `500 ${repoFontSize}px "DM Sans", "Inter", system-ui, sans-serif`;
+        textWidth = ctx.measureText(workspaceName).width + 24; // + separator space
+    }
+    const badgeWidth = logoDisplayWidth + textWidth + badgePadding * 2;
+
+    const badgeX = bounds.minX + 16;
+    const badgeY = bounds.maxY + 16;  // Same padding as left side
+
+    const badgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    badgeGroup.setAttribute('class', 'export-watermark');
+
+    // Badge background (rounded rect)
+    const badgeBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    badgeBg.setAttribute('x', String(badgeX));
+    badgeBg.setAttribute('y', String(badgeY));
+    badgeBg.setAttribute('width', String(badgeWidth));
+    badgeBg.setAttribute('height', String(badgeHeight));
+    badgeBg.setAttribute('rx', '10');
+    badgeBg.setAttribute('fill', bgColor);
+    badgeBg.setAttribute('stroke', borderColor);
+    badgeBg.setAttribute('stroke-width', '1');
+    badgeGroup.appendChild(badgeBg);
+
+    // Codag logo - use nested SVG to preserve exact viewBox/aspect ratio
+    const logoColor = '#8b5cf6'; // Purple
+    const logoSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    logoSvg.setAttribute('x', String(badgeX + badgePadding));
+    logoSvg.setAttribute('y', String(badgeY + (badgeHeight - logoDisplayHeight) / 2));
+    logoSvg.setAttribute('width', String(logoDisplayWidth));
+    logoSvg.setAttribute('height', String(logoDisplayHeight));
+    logoSvg.setAttribute('viewBox', '0 0 183.49 48.23');
+
+    // Logo group with original transform
+    const logoG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    logoG.setAttribute('transform', 'translate(-4.663,-100.212)');
+
+    // Circle (bottom left of icon)
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12.99');
+    circle.setAttribute('cy', '136.378');
+    circle.setAttribute('r', '8.327');
+    circle.setAttribute('fill', logoColor);
+    logoG.appendChild(circle);
+
+    // Square with hole (top right of icon)
+    const squarePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    squarePath.setAttribute('d', 'm 23.349,100.212 c -1.885,0 -3.402,1.517 -3.402,3.402 v 22.413 c 0,1.885 1.517,3.402 3.402,3.402 h 22.413 c 1.885,0 3.402,-1.517 3.402,-3.402 v -22.413 c 0,-1.885 -1.517,-3.402 -3.402,-3.402 z m 11.303,6.391 a 8.327,8.327 0 0 1 8.327,8.327 8.327,8.327 0 0 1 -8.327,8.327 8.327,8.327 0 0 1 -8.327,-8.327 8.327,8.327 0 0 1 8.327,-8.327 z');
+    squarePath.setAttribute('fill', logoColor);
+    logoG.appendChild(squarePath);
+
+    // Diagonal connector
+    const diagonal = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    diagonal.setAttribute('d', 'm 12.408,130.606 13.191,-13.191 6.269,6.4 -15.412,15.412 z');
+    diagonal.setAttribute('fill', logoColor);
+    logoG.appendChild(diagonal);
+
+    // "codag" text with original transform
+    const logoText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    logoText.setAttribute('x', '55.822');
+    logoText.setAttribute('y', '131.091');
+    logoText.setAttribute('transform', 'scale(0.944,1.059)');
+    logoText.setAttribute('fill', fgColor);
+    logoText.setAttribute('font-family', '"DM Sans", system-ui, sans-serif');
+    logoText.setAttribute('font-size', '44px');
+    logoText.setAttribute('font-weight', '700');
+    logoText.textContent = 'codag';
+    logoG.appendChild(logoText);
+
+    logoSvg.appendChild(logoG);
+    badgeGroup.appendChild(logoSvg);
+
+    // Workspace name (inline after logo)
+    if (workspaceName) {
+        // Separator dot
+        const separator = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        separator.setAttribute('cx', String(badgeX + badgePadding + logoDisplayWidth + 8));
+        separator.setAttribute('cy', String(badgeY + badgeHeight / 2));
+        separator.setAttribute('r', '2.5');
+        separator.setAttribute('fill', descriptionFgColor);
+        badgeGroup.appendChild(separator);
+
+        const nameText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        nameText.setAttribute('x', String(badgeX + badgePadding + logoDisplayWidth + 20));
+        nameText.setAttribute('y', String(badgeY + badgeHeight / 2));
+        nameText.setAttribute('dominant-baseline', 'central');
+        nameText.setAttribute('fill', descriptionFgColor);
+        nameText.setAttribute('font-family', '"DM Sans", "Inter", system-ui, sans-serif');
+        nameText.setAttribute('font-size', `${repoFontSize}px`);
+        nameText.setAttribute('font-weight', '500');
+        nameText.textContent = workspaceName;
+        badgeGroup.appendChild(nameText);
+    }
+
+    svg.appendChild(badgeGroup);
+
     return svg;
+}
+
+/**
+ * Get the current workspace/codebase name from state
+ */
+function getWorkspaceName(): string {
+    return state.workspaceName || '';
 }
 
 type ImageFormat = 'png' | 'jpeg';

@@ -32,7 +32,7 @@ export function measureNodeDimensions(label: string, options?: NodeMeasureOption
     const fontSize = options?.fontSize || '15px';
     const fontWeight = options?.fontWeight || '400';
     const minWidth = options?.minWidth || 80;
-    const maxWidth = options?.maxWidth || 200;
+    const maxWidth = options?.maxWidth || 240;
     const horizontalPadding = options?.horizontalPadding || 16;  // 8px on each side
     const verticalPadding = options?.verticalPadding || 12;    // 6px on each side
 
