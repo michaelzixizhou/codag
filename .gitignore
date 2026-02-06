@@ -62,7 +62,4 @@ frontend/media/tree-sitter/
 backend/benchmark/
 
 # Launch planning (private)
-LAUNCH_PLAN.md
-PRODUCT_HUNT.txt
-HN_POST.txt
-REDDIT_POST.txt
+drafts/

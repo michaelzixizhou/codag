@@ -113,14 +113,11 @@ function extractHyphenatedLines(element: HTMLElement): string[] {
                 const lineText = text.substring(lineStart, i);
 
                 // Check if this is a hyphenated break (word split in middle)
-                // Only hyphenate if character IMMEDIATELY before break is a letter
-                // AND character IMMEDIATELY after break is a letter (no space between)
                 const charBeforeBreak = i > 0 ? text[i - 1] : '';
                 const charAfterBreak = text[i] || '';
                 const isHyphenatedBreak = /[a-zA-Z]/.test(charBeforeBreak) && /[a-zA-Z]/.test(charAfterBreak);
 
                 if (isHyphenatedBreak) {
-                    // Word was split - add explicit hyphen
                     lines.push(lineText + '-');
                 } else {
                     lines.push(lineText);
@@ -130,13 +127,76 @@ function extractHyphenatedLines(element: HTMLElement): string[] {
                 lastTop = rect.top;
             }
         } else {
-            // End of text - get final line
             const finalLine = text.substring(lineStart);
             if (finalLine) lines.push(finalLine);
         }
     }
 
     return lines.length > 0 ? lines : [text];
+}
+
+/**
+ * Wrap text to fit within a given width using canvas measurement.
+ * Used as fallback when DOM-based extraction fails (e.g., large zoomed-out graphs).
+ */
+function wrapTextToWidth(text: string, maxWidth: number, fontSize: number, fontWeight: string = '400'): string[] {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return [text];
+
+    ctx.font = `${fontWeight} ${fontSize}px "DM Sans", "Inter", "Segoe UI", -apple-system, sans-serif`;
+
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (const word of words) {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+        const metrics = ctx.measureText(testLine);
+
+        if (metrics.width > maxWidth && currentLine) {
+            // Current line is full, start new line
+            lines.push(currentLine);
+            currentLine = word;
+        } else {
+            currentLine = testLine;
+        }
+    }
+
+    // Add the last line
+    if (currentLine) {
+        lines.push(currentLine);
+    }
+
+    // If a single word is too long, we need to break it with hyphens
+    const finalLines: string[] = [];
+    for (const line of lines) {
+        if (ctx.measureText(line).width > maxWidth && !line.includes(' ')) {
+            // Single word that's too long - break it
+            let remaining = line;
+            while (remaining.length > 0) {
+                let breakPoint = remaining.length;
+                for (let i = 1; i <= remaining.length; i++) {
+                    const segment = remaining.substring(0, i) + (i < remaining.length ? '-' : '');
+                    if (ctx.measureText(segment).width > maxWidth && i > 1) {
+                        breakPoint = i - 1;
+                        break;
+                    }
+                }
+                if (breakPoint < remaining.length) {
+                    finalLines.push(remaining.substring(0, breakPoint) + '-');
+                    remaining = remaining.substring(breakPoint);
+                } else {
+                    finalLines.push(remaining);
+                    remaining = '';
+                }
+            }
+        } else {
+            finalLines.push(line);
+        }
+    }
+
+    return finalLines.length > 0 ? finalLines : [text];
 }
 
 /**
@@ -172,7 +232,11 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
 
     const width = bounds.maxX - bounds.minX;
     const contentHeight = bounds.maxY - bounds.minY;
-    const badgeAreaHeight = 80; // Space for the badge at bottom (16px top + 48px badge + 16px bottom)
+
+    // Calculate badge scale early so we can size the badge area correctly
+    const BASE_WIDTH = 1200;  // Reference width for base sizing
+    const badgeScale = Math.max(0.8, Math.min(2.5, width / BASE_WIDTH));  // Clamp between 0.8x and 2.5x
+    const badgeAreaHeight = (16 + 48 + 16) * badgeScale; // Space for badge (margin + height + margin)
     const totalHeight = contentHeight + badgeAreaHeight;
 
     // Calculate text scale for large graphs
@@ -429,8 +493,7 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
             g.appendChild(rect);
         }
 
-        // Text label - use SVG text with tspan, extracting hyphenated lines from DOM
-        // This captures the browser's actual hyphenation and renders it natively
+        // Text label - try DOM extraction first, fallback to canvas wrapping
         const labelSpan = nodeEl.querySelector('.node-title-wrapper span') as HTMLElement | null;
         const labelText = nodeData.label;
 
@@ -440,14 +503,32 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
             const fontSize = baseFontSize * textScale;
             const fontWeight = nodeData.type === 'workflow-title' ? '600' : '400';
 
-            // Extract hyphenated lines from the actual rendered DOM element
-            // This captures exactly where the browser broke lines, including hyphens
+            // Calculate available text width (node width minus padding)
+            const textPadding = nodeData.type === 'workflow-title' ? 24 : 16;
+            const availableWidth = w - textPadding;
+
+            // Try DOM-based extraction first (more accurate for normal zoom levels)
             let lines: string[];
             if (labelSpan) {
                 lines = extractHyphenatedLines(labelSpan);
+
+                // Validate: if DOM returns single line but text is long, use canvas fallback
+                // This handles large graphs where DOM might be zoomed out
+                if (lines.length === 1 && labelText.length > 25) {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                        ctx.font = `${fontWeight} ${fontSize}px "DM Sans", "Inter", "Segoe UI", -apple-system, sans-serif`;
+                        const textWidth = ctx.measureText(labelText).width;
+                        // If text would overflow, use canvas wrapping
+                        if (textWidth > availableWidth * 1.1) {
+                            lines = wrapTextToWidth(labelText, availableWidth, fontSize, fontWeight);
+                        }
+                    }
+                }
             } else {
-                // Fallback: single line if DOM element not found
-                lines = [labelText];
+                // No DOM element, use canvas wrapping
+                lines = wrapTextToWidth(labelText, availableWidth, fontSize, fontWeight);
             }
 
             // Create SVG text element
@@ -482,12 +563,17 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     svg.appendChild(mainGroup);
 
     // Add watermark badge with logo and codebase name (bottom left)
-    // Fixed size - not proportional to graph, but to image resolution
-    const badgeHeight = 48;
-    const badgePadding = 14;
-    const logoDisplayWidth = 120;  // Fixed logo width in badge
-    const logoDisplayHeight = 32;  // Fixed logo height in badge
-    const repoFontSize = 18;
+    // badgeScale already calculated at top of function for badge area sizing
+    const badgeHeight = 48 * badgeScale;
+    const badgePadding = 14 * badgeScale;
+    const logoDisplayWidth = 120 * badgeScale;
+    const logoDisplayHeight = 32 * badgeScale;
+    const repoFontSize = 18 * badgeScale;
+    const badgeMargin = 16 * badgeScale;
+    const separatorRadius = 2.5 * badgeScale;
+    const separatorGap = 8 * badgeScale;
+    const textGap = 20 * badgeScale;
+    const cornerRadius = 10 * badgeScale;
     const workspaceName = getWorkspaceName();
 
     // Calculate badge width based on content
@@ -496,12 +582,12 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     let textWidth = 0;
     if (ctx && workspaceName) {
         ctx.font = `500 ${repoFontSize}px "DM Sans", "Inter", system-ui, sans-serif`;
-        textWidth = ctx.measureText(workspaceName).width + 24; // + separator space
+        textWidth = ctx.measureText(workspaceName).width + 24 * badgeScale; // + separator space
     }
     const badgeWidth = logoDisplayWidth + textWidth + badgePadding * 2;
 
-    const badgeX = bounds.minX + 16;
-    const badgeY = bounds.maxY + 16;  // Same padding as left side
+    const badgeX = bounds.minX + badgeMargin;
+    const badgeY = bounds.maxY + badgeMargin;
 
     const badgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     badgeGroup.setAttribute('class', 'export-watermark');
@@ -512,7 +598,7 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     badgeBg.setAttribute('y', String(badgeY));
     badgeBg.setAttribute('width', String(badgeWidth));
     badgeBg.setAttribute('height', String(badgeHeight));
-    badgeBg.setAttribute('rx', '10');
+    badgeBg.setAttribute('rx', String(cornerRadius));
     badgeBg.setAttribute('fill', bgColor);
     badgeBg.setAttribute('stroke', borderColor);
     badgeBg.setAttribute('stroke-width', '1');
@@ -570,14 +656,14 @@ function prepareSVGForExport(bounds: { minX: number; minY: number; maxX: number;
     if (workspaceName) {
         // Separator dot
         const separator = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        separator.setAttribute('cx', String(badgeX + badgePadding + logoDisplayWidth + 8));
+        separator.setAttribute('cx', String(badgeX + badgePadding + logoDisplayWidth + separatorGap));
         separator.setAttribute('cy', String(badgeY + badgeHeight / 2));
-        separator.setAttribute('r', '2.5');
+        separator.setAttribute('r', String(separatorRadius));
         separator.setAttribute('fill', descriptionFgColor);
         badgeGroup.appendChild(separator);
 
         const nameText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        nameText.setAttribute('x', String(badgeX + badgePadding + logoDisplayWidth + 20));
+        nameText.setAttribute('x', String(badgeX + badgePadding + logoDisplayWidth + textGap));
         nameText.setAttribute('y', String(badgeY + badgeHeight / 2));
         nameText.setAttribute('dominant-baseline', 'central');
         nameText.setAttribute('fill', descriptionFgColor);
