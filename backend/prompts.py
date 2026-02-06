@@ -87,6 +87,11 @@ LLM APIs (use "llm" type):
 - GGUF: GGUFReader(), GGUFWriter(), model loading from .gguf files
 - ctransformers: AutoModelForCausalLM.from_pretrained()
 - node-llama-cpp: getLlama(), model.loadModel(), LlamaChatSession
+- MCP (TS): McpServer(), server.tool(), server.resource(), StdioServerTransport, addTool()
+- MCP (Python): MCPServer(), FastMCP(), @mcp.tool(), @server.list_tools(), @server.call_tool()
+- MCP (Go): server.NewMCPServer(), mcpServer.AddTool(), mcp.NewTool(), mcp.NewResource()
+- MCP (Rust): use rmcp::, .serve(transport), ServiceExt
+- MCP (C++): mcp::server, mcp::tool_builder, register_tool(), register_resource()
 
 NOT LLM (use "step" type):
 - HTTP clients: httpx, requests, fetch, axios

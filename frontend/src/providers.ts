@@ -306,6 +306,85 @@ export const LLM_PROVIDERS: LLMProvider[] = [
     },
 
     // -------------------------------------------------------------------------
+    // MCP (Model Context Protocol) Servers
+    // -------------------------------------------------------------------------
+    {
+        id: 'mcp',
+        displayName: 'MCP Server',
+        identifiers: ['modelcontextprotocol', 'fastmcp', 'mcp-server', 'mcpserver', 'mcp', 'mcp-go', 'rmcp', 'mcp_server'],
+        importPatterns: [
+            // JS/TS: Official MCP SDK (matches any subpath like /server/mcp.js)
+            /import\s+.*from\s+['"]@modelcontextprotocol\/sdk/,
+            /require\s*\(\s*['"]@modelcontextprotocol\/sdk/,
+            // JS/TS: Community FastMCP npm package
+            /import\s+.*from\s+['"]fastmcp['"]/,
+            /require\s*\(\s*['"]fastmcp['"]\s*\)/,
+            // Python: Official MCP SDK (high-level, lowlevel, and deep submodules)
+            /from\s+mcp\.server\s+import/i,
+            /from\s+mcp\.server\./i,
+            /from\s+mcp\s+import/i,
+            /import\s+mcp\.server/i,
+            /import\s+mcp\b/i,
+            // Python: FastMCP standalone package
+            /from\s+fastmcp\s+import/i,
+            /import\s+fastmcp/i,
+            // Go: MCP SDK packages
+            /["']github\.com\/mark3labs\/mcp-go/,
+            /["']github\.com\/modelcontextprotocol\/go-sdk/,
+            // Rust: MCP crates
+            /use\s+rmcp\b/,
+            /use\s+mcp_server\b/,
+            /use\s+mcp_sdk\b/,
+            // C++: MCP headers and namespace
+            /#include\s+["<]mcp_server\.h[">]/,
+            /#include\s+["<]mcp_tool\.h[">]/,
+            /mcp::server/,
+        ],
+        callPatterns: [
+            // Server instantiation
+            /new\s+McpServer\s*\(/,
+            /McpServer\s*\(/,
+            /MCPServer\s*\(/,
+            /FastMCP\s*\(/,
+            // Tool/resource/prompt registration (high-level: .tool(), community: .addTool(), Go: .AddTool())
+            /\.tool\s*\(/,
+            /\.resource\s*\(/,
+            /\.prompt\s*\(/,
+            /\.addTool\s*\(/,
+            /\.addResource\s*\(/,
+            /\.addPrompt\s*\(/,
+            /\.AddTool\s*\(/,
+            /\.AddResource\s*\(/,
+            /\.AddPrompt\s*\(/,
+            // Go: server/mcp constructors
+            /NewMCPServer\s*\(/,
+            /mcp\.NewTool\s*\(/,
+            /mcp\.NewResource\s*\(/,
+            // Python decorators (high-level: @mcp.tool, lowlevel: @app.call_tool, @server.list_prompts)
+            /@\w+\.tool\b/,
+            /@\w+\.resource\b/,
+            /@\w+\.prompt\b/,
+            /@\w+\.call_tool\b/,
+            /@\w+\.list_tools\b/,
+            /@\w+\.list_prompts\b/,
+            /@\w+\.get_prompt\b/,
+            /@\w+\.list_resources\b/,
+            /@\w+\.read_resource\b/,
+            // C++: registration and builder patterns
+            /register_tool\s*\(/,
+            /register_resource\s*\(/,
+            /tool_builder\s*\(/,
+            // Rust: rmcp serve pattern
+            /\.serve\s*\(\s*transport/,
+            // Transport setup
+            /StdioServerTransport/,
+            /SseServerTransport/i,
+            // Server lifecycle
+            /server\.connect\s*\(/,
+        ],
+    },
+
+    // -------------------------------------------------------------------------
     // IDE/Editor LLM APIs
     // -------------------------------------------------------------------------
     {

@@ -95,6 +95,34 @@ class StaticAnalyzer:
         r"from\s+langchain.*import\s+LlamaCpp",
         r"from\s+langchain_community.*import\s+LlamaCpp",
         r"node-llama-cpp",
+
+        # MCP (Model Context Protocol) - JS/TS
+        r"import\s+.*from\s+['\"]@modelcontextprotocol/sdk",
+        r"require\s*\(\s*['\"]@modelcontextprotocol/sdk",
+        r"import\s+.*from\s+['\"]fastmcp['\"]",
+        r"require\s*\(\s*['\"]fastmcp['\"]",
+        # MCP - Python
+        r"from\s+mcp\.server\s+import",
+        r"from\s+mcp\.server\.",
+        r"from\s+mcp\s+import",
+        r"import\s+mcp\.server",
+        r"import\s+mcp\b",
+        r"from\s+fastmcp\s+import",
+        r"import\s+fastmcp",
+        r"McpServer\s*\(",
+        r"MCPServer\s*\(",
+        r"FastMCP\s*\(",
+        # MCP - Go
+        r"github\.com/mark3labs/mcp-go",
+        r"github\.com/modelcontextprotocol/go-sdk",
+        # MCP - Rust
+        r"use\s+rmcp\b",
+        r"use\s+mcp_server\b",
+        r"use\s+mcp_sdk\b",
+        # MCP - C++
+        r'#include\s+[<"]mcp_server\.h[>"]',
+        r'#include\s+[<"]mcp_tool\.h[>"]',
+        r"mcp::server",
     ]
 
     # LLM API Call Patterns
@@ -111,6 +139,45 @@ class StaticAnalyzer:
         r"Llama\s*\(",
         r"GGUFReader\s*\(",
         r"AutoModelForCausalLM\.from_pretrained",
+        # MCP - server instantiation
+        r"new\s+McpServer\s*\(",
+        r"McpServer\s*\(",
+        r"MCPServer\s*\(",
+        r"FastMCP\s*\(",
+        # MCP - tool/resource/prompt registration
+        r"\.tool\s*\(",
+        r"\.resource\s*\(",
+        r"\.prompt\s*\(",
+        r"\.addTool\s*\(",
+        r"\.addResource\s*\(",
+        r"\.addPrompt\s*\(",
+        r"\.AddTool\s*\(",
+        r"\.AddResource\s*\(",
+        r"\.AddPrompt\s*\(",
+        # MCP - Go constructors
+        r"NewMCPServer\s*\(",
+        r"mcp\.NewTool\s*\(",
+        r"mcp\.NewResource\s*\(",
+        # MCP - Python decorators
+        r"@\w+\.tool\b",
+        r"@\w+\.resource\b",
+        r"@\w+\.prompt\b",
+        r"@\w+\.call_tool\b",
+        r"@\w+\.list_tools\b",
+        r"@\w+\.list_prompts\b",
+        r"@\w+\.get_prompt\b",
+        r"@\w+\.list_resources\b",
+        r"@\w+\.read_resource\b",
+        # MCP - C++
+        r"register_tool\s*\(",
+        r"register_resource\s*\(",
+        r"tool_builder\s*\(",
+        # MCP - Rust
+        r"\.serve\s*\(\s*transport",
+        # MCP - transport
+        r"StdioServerTransport",
+        r"[Ss]seServerTransport",
+        r"server\.connect\s*\(",
     ]
 
     # Framework Patterns (keep for framework-specific detection)
@@ -198,6 +265,8 @@ class StaticAnalyzer:
             return "ollama"
         if re.search(r"from\s+llama_cpp\s+import|import\s+llama_cpp|from\s+gguf\s+import|from\s+ctransformers\s+import", code):
             return "llama-cpp"
+        if re.search(r"@modelcontextprotocol/sdk|from\s+mcp\.server|from\s+mcp\s+import|from\s+fastmcp\s+import|McpServer\s*\(|MCPServer\s*\(|FastMCP\s*\(|mcp-go|modelcontextprotocol/go-sdk|use\s+rmcp\b|mcp::server|mcp_server\.h", code):
+            return "mcp"
 
         # Check if it has any LLM patterns
         if StaticAnalyzer.detect_workflow(code):
