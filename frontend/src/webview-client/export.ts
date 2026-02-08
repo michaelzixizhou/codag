@@ -6,6 +6,19 @@ declare const d3: any;
 // Export padding around the content
 const EXPORT_PADDING = 40;
 
+// Max canvas dimension (browser limit)
+const MAX_CANVAS_DIM = 16384;
+
+// Resolution options for export
+const RESOLUTION_OPTIONS = [
+    { label: '200%', scale: 2 },
+    { label: '150%', scale: 1.5 },
+    { label: '100%', scale: 1 },
+    { label: '75%', scale: 0.75 },
+    { label: '50%', scale: 0.5 },
+    { label: '30%', scale: 0.3 },
+];
+
 // Computed style cache for CSS variable resolution
 let computedStyles: CSSStyleDeclaration | null = null;
 
@@ -713,8 +726,8 @@ async function svgToBase64(svg: SVGSVGElement, format: ImageFormat, scale: numbe
         img.onload = () => {
             // Create canvas after image loads
             const canvas = document.createElement('canvas');
-            canvas.width = width * scale;
-            canvas.height = height * scale;
+            canvas.width = Math.round(width * scale);
+            canvas.height = Math.round(height * scale);
 
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
             if (!ctx) {
@@ -743,7 +756,7 @@ async function svgToBase64(svg: SVGSVGElement, format: ImageFormat, scale: numbe
                 // Extract base64 data (remove "data:image/xxx;base64," prefix)
                 const base64Data = dataUrl.split(',')[1];
                 if (!base64Data) {
-                    reject(new Error(`Failed to create ${format.toUpperCase()} image`));
+                    reject(new Error(`Failed to create ${format.toUpperCase()} image (canvas ${canvas.width}x${canvas.height} may exceed browser limits)`));
                     return;
                 }
                 resolve(base64Data);
@@ -803,7 +816,7 @@ function showExportNotification(message: string, isError: boolean = false): void
 /**
  * Export the entire graph as PNG
  */
-export async function exportAllAsPNG(): Promise<void> {
+export async function exportAllAsPNG(scale: number = 2): Promise<void> {
     try {
         const bounds = getExportBounds();
         if (!bounds) {
@@ -812,7 +825,7 @@ export async function exportAllAsPNG(): Promise<void> {
         }
 
         const svg = prepareSVGForExport(bounds);
-        const base64Data = await svgToBase64(svg, 'png', 2);
+        const base64Data = await svgToBase64(svg, 'png', scale);
 
         const timestamp = new Date().toISOString().slice(0, 10);
         await saveBase64Image(base64Data, `codag-workflow-${timestamp}.png`);
@@ -825,7 +838,7 @@ export async function exportAllAsPNG(): Promise<void> {
 /**
  * Export the entire graph as JPEG with editor background color
  */
-export async function exportAllAsJPEG(): Promise<void> {
+export async function exportAllAsJPEG(scale: number = 2): Promise<void> {
     try {
         const bounds = getExportBounds();
         if (!bounds) {
@@ -834,7 +847,7 @@ export async function exportAllAsJPEG(): Promise<void> {
         }
 
         const svg = prepareSVGForExport(bounds);
-        const base64Data = await svgToBase64(svg, 'jpeg', 2);
+        const base64Data = await svgToBase64(svg, 'jpeg', scale);
 
         const timestamp = new Date().toISOString().slice(0, 10);
         await saveBase64Image(base64Data, `codag-workflow-${timestamp}.jpg`);
@@ -847,7 +860,7 @@ export async function exportAllAsJPEG(): Promise<void> {
 /**
  * Export a specific workflow group as PNG
  */
-export async function exportWorkflowAsPNG(groupId: string, groupName: string): Promise<void> {
+export async function exportWorkflowAsPNG(groupId: string, groupName: string, scale: number = 2): Promise<void> {
     try {
         const bounds = getExportBounds(groupId);
         if (!bounds) {
@@ -856,7 +869,7 @@ export async function exportWorkflowAsPNG(groupId: string, groupName: string): P
         }
 
         const svg = prepareSVGForExport(bounds, groupId);
-        const base64Data = await svgToBase64(svg, 'png', 2);
+        const base64Data = await svgToBase64(svg, 'png', scale);
 
         // Sanitize filename
         const safeName = groupName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
@@ -870,7 +883,7 @@ export async function exportWorkflowAsPNG(groupId: string, groupName: string): P
 /**
  * Export a specific workflow group as JPEG with editor background color
  */
-export async function exportWorkflowAsJPEG(groupId: string, groupName: string): Promise<void> {
+export async function exportWorkflowAsJPEG(groupId: string, groupName: string, scale: number = 2): Promise<void> {
     try {
         const bounds = getExportBounds(groupId);
         if (!bounds) {
@@ -879,7 +892,7 @@ export async function exportWorkflowAsJPEG(groupId: string, groupName: string): 
         }
 
         const svg = prepareSVGForExport(bounds, groupId);
-        const base64Data = await svgToBase64(svg, 'jpeg', 2);
+        const base64Data = await svgToBase64(svg, 'jpeg', scale);
 
         // Sanitize filename
         const safeName = groupName.replace(/[^a-z0-9]/gi, '-').toLowerCase();
@@ -888,6 +901,72 @@ export async function exportWorkflowAsJPEG(groupId: string, groupName: string): 
         console.error('Export failed:', error);
         showExportNotification('Export failed: ' + (error as Error).message, true);
     }
+}
+
+/**
+ * Build resolution picker HTML for a given graph bounds.
+ * Disables options that exceed browser canvas limits.
+ */
+function buildResolutionPicker(bounds: { minX: number; minY: number; maxX: number; maxY: number }): string {
+    const baseW = bounds.maxX - bounds.minX;
+    const baseH = bounds.maxY - bounds.minY;
+
+    return RESOLUTION_OPTIONS.map(opt => {
+        const w = Math.round(baseW * opt.scale);
+        const h = Math.round(baseH * opt.scale);
+        const exceeds = w > MAX_CANVAS_DIM || h > MAX_CANVAS_DIM;
+        return `
+            <button class="export-dropdown-item export-res-item${exceeds ? ' disabled' : ''}"
+                    data-scale="${opt.scale}" ${exceeds ? 'disabled' : ''}>
+                <span class="export-res-label">${opt.label}</span>
+                <span class="export-res-dims">${w.toLocaleString()} × ${h.toLocaleString()}px</span>
+                ${exceeds ? '<span class="export-res-warn">Exceeds export limit — pick a lower resolution</span>' : ''}
+            </button>`;
+    }).join('');
+}
+
+/**
+ * Show a resolution picker dropdown, returns selected scale or null if cancelled.
+ */
+function showResolutionPicker(
+    anchorRect: DOMRect,
+    bounds: { minX: number; minY: number; maxX: number; maxY: number }
+): Promise<number | null> {
+    return new Promise(resolve => {
+        // Remove any existing resolution picker
+        document.querySelector('.export-resolution-picker')?.remove();
+
+        const picker = document.createElement('div');
+        picker.className = 'export-dropdown export-resolution-picker visible';
+        picker.innerHTML = `
+            <div class="export-dropdown-header">Resolution</div>
+            ${buildResolutionPicker(bounds)}
+        `;
+        picker.style.top = `${anchorRect.bottom + 4}px`;
+        picker.style.right = `${window.innerWidth - anchorRect.right}px`;
+        document.body.appendChild(picker);
+
+        let resolved = false;
+
+        picker.addEventListener('click', (e) => {
+            const item = (e.target as HTMLElement).closest('.export-res-item:not(.disabled)') as HTMLElement;
+            if (!item) return;
+            resolved = true;
+            picker.remove();
+            document.removeEventListener('click', closeHandler);
+            resolve(parseFloat(item.dataset.scale!));
+        });
+
+        const closeHandler = (e: MouseEvent) => {
+            if (!picker.contains(e.target as Node)) {
+                picker.remove();
+                document.removeEventListener('click', closeHandler);
+                if (!resolved) resolve(null);
+            }
+        };
+        // Delay to avoid the current click from closing it
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    });
 }
 
 /**
@@ -902,14 +981,12 @@ export function setupExportButton(): void {
     dropdown.className = 'export-dropdown';
     dropdown.innerHTML = `
         <button class="export-dropdown-item" data-format="png">
-            <span class="export-dropdown-icon">📷</span>
-            Export as PNG
-            <span class="export-dropdown-hint">Transparent background</span>
+            PNG
+            <span class="export-dropdown-hint">Transparent</span>
         </button>
         <button class="export-dropdown-item" data-format="jpeg">
-            <span class="export-dropdown-icon">🖼️</span>
-            Export as JPEG
-            <span class="export-dropdown-hint">With background color</span>
+            JPEG
+            <span class="export-dropdown-hint">With background</span>
         </button>
     `;
     document.body.appendChild(dropdown);
@@ -923,25 +1000,41 @@ export function setupExportButton(): void {
         dropdown.classList.toggle('visible');
     });
 
-    // Handle format selection
+    // Handle format selection → show resolution picker
     dropdown.addEventListener('click', async (e) => {
         const target = e.target as HTMLElement;
         const item = target.closest('.export-dropdown-item') as HTMLElement;
         if (!item) return;
+        e.stopPropagation();
 
+        const format = item.dataset.format as 'png' | 'jpeg';
+        if (!format) return;
+
+        const bounds = getExportBounds();
+        if (!bounds) {
+            dropdown.classList.remove('visible');
+            showExportNotification('No graph content to export', true);
+            return;
+        }
+
+        // Show resolution picker anchored to the export button (same position as format dropdown)
+        const btnRect = exportBtn.getBoundingClientRect();
         dropdown.classList.remove('visible');
-        const format = item.dataset.format;
+        const scale = await showResolutionPicker(btnRect, bounds);
+        if (scale === null) return;
 
         if (format === 'png') {
-            await exportAllAsPNG();
-        } else if (format === 'jpeg') {
-            await exportAllAsJPEG();
+            await exportAllAsPNG(scale);
+        } else {
+            await exportAllAsJPEG(scale);
         }
     });
 
-    // Close dropdown when clicking outside
+    // Close all export dropdowns when clicking outside
     document.addEventListener('click', () => {
         dropdown.classList.remove('visible');
+        document.querySelector('.export-resolution-picker')?.remove();
+        document.querySelector('.workflow-export-menu')?.remove();
     });
 }
 
@@ -1039,12 +1132,12 @@ export function showWorkflowExportMenu(x: number, y: number, groupId: string, gr
     menu.className = 'workflow-export-menu export-dropdown visible';
     menu.innerHTML = `
         <button class="export-dropdown-item" data-format="png">
-            <span class="export-dropdown-icon">📷</span>
-            Export as PNG
+            PNG
+            <span class="export-dropdown-hint">Transparent</span>
         </button>
         <button class="export-dropdown-item" data-format="jpeg">
-            <span class="export-dropdown-icon">🖼️</span>
-            Export as JPEG
+            JPEG
+            <span class="export-dropdown-hint">With background</span>
         </button>
     `;
     menu.style.top = `${y}px`;
@@ -1052,19 +1145,33 @@ export function showWorkflowExportMenu(x: number, y: number, groupId: string, gr
     menu.style.right = 'auto';
     document.body.appendChild(menu);
 
-    // Handle format selection
+    // Handle format selection → show resolution picker
     menu.addEventListener('click', async (e) => {
         const target = e.target as HTMLElement;
         const item = target.closest('.export-dropdown-item') as HTMLElement;
         if (!item) return;
+        e.stopPropagation();
 
+        const format = item.dataset.format as 'png' | 'jpeg';
+        if (!format) return;
+
+        const bounds = getExportBounds(groupId);
+        if (!bounds) {
+            menu.remove();
+            showExportNotification('Workflow not found', true);
+            return;
+        }
+
+        const menuRect = menu.getBoundingClientRect();
         menu.remove();
-        const format = item.dataset.format;
+        document.removeEventListener('click', closeHandler);
+        const scale = await showResolutionPicker(menuRect, bounds);
+        if (scale === null) return;
 
         if (format === 'png') {
-            await exportWorkflowAsPNG(groupId, groupName);
-        } else if (format === 'jpeg') {
-            await exportWorkflowAsJPEG(groupId, groupName);
+            await exportWorkflowAsPNG(groupId, groupName, scale);
+        } else {
+            await exportWorkflowAsJPEG(groupId, groupName, scale);
         }
     });
 

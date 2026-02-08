@@ -264,6 +264,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('codag.showFilePicker', async () => {
             log('Opening file picker (preserving current graph)...');
+            webview.showLoading('Loading file tree...');
 
             // Fast: get all source files without LLM analysis
             const allFiles = await WorkflowDetector.getAllSourceFiles();
@@ -271,6 +272,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 webview.notifyWarning('No source files found.');
                 return;
             }
+
+            webview.updateLoadingText('Building file tree...', `${allFiles.length.toLocaleString()} files`);
 
             // Build file tree and show picker immediately (includes token estimates)
             const { tree, totalFiles } = await buildFileTree(allFiles, context);

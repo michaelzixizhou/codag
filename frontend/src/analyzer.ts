@@ -18,93 +18,10 @@ export class WorkflowDetector {
         '.swift', '.java', '.lua',
     ];
 
-    private static async buildExcludePattern(workspaceUri: vscode.Uri): Promise<string> {
-        const patterns: string[] = [];
-
-        // Use centralized exclude patterns from config
-        patterns.push(...EXCLUDE_PATTERNS);
-
-        // Find all .gitignore files in the workspace
-        try {
-            const gitignoreFiles = await vscode.workspace.findFiles('**/.gitignore', null, 100);
-
-            for (const gitignoreUri of gitignoreFiles) {
-                try {
-                    const content = await vscode.workspace.fs.readFile(gitignoreUri);
-                    const text = Buffer.from(content).toString('utf8');
-
-                    // Get the directory containing this .gitignore
-                    const gitignoreDir = path.dirname(gitignoreUri.fsPath);
-                    const workspaceDir = workspaceUri.fsPath;
-                    const relativePath = path.relative(workspaceDir, gitignoreDir);
-
-                    const lines = text.split('\n');
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        // Skip empty lines and comments
-                        if (!trimmed || trimmed.startsWith('#')) continue;
-
-                        // Skip malformed patterns with commas (these are not valid gitignore syntax)
-                        // Example: "*.py,cover" should be two lines: "*.py" and "cover"
-                        if (trimmed.includes(',') && !trimmed.startsWith('!')) {
-                            continue;
-                        }
-
-                        // Convert gitignore pattern to glob pattern
-                        let pattern = trimmed;
-
-                        // If .gitignore is in a subdirectory, prefix patterns appropriately
-                        const prefix = relativePath && relativePath !== '.' ? `${relativePath}/` : '';
-
-                        // Handle directory patterns (ending with /)
-                        if (pattern.endsWith('/')) {
-                            pattern = pattern.slice(0, -1);
-                            if (pattern.startsWith('/')) {
-                                // Absolute path from this .gitignore's directory
-                                pattern = `${prefix}${pattern.slice(1)}/**`;
-                            } else {
-                                // Relative pattern - match anywhere under this directory
-                                pattern = `${prefix}**/${pattern}/**`;
-                            }
-                        }
-                        // Handle specific file patterns
-                        else if (pattern.startsWith('*.')) {
-                            pattern = `${prefix}**/${pattern}`;
-                        }
-                        // Handle absolute paths from this .gitignore
-                        else if (pattern.startsWith('/')) {
-                            pattern = `${prefix}${pattern.slice(1)}`;
-                            if (!pattern.endsWith('/**')) {
-                                pattern = `${pattern}/**`;
-                            }
-                        }
-                        // Handle paths with subdirectories
-                        else if (pattern.includes('/')) {
-                            if (!pattern.startsWith('**/')) {
-                                pattern = `${prefix}**/${pattern}`;
-                            }
-                            if (!pattern.endsWith('/**')) {
-                                pattern = `${pattern}/**`;
-                            }
-                        }
-                        // Handle simple directory/file names
-                        else {
-                            // ONLY add ** prefix, don't add /** suffix for simple names
-                            // This prevents matching file extensions
-                            pattern = `${prefix}**/${pattern}`;
-                        }
-
-                        patterns.push(pattern);
-                    }
-                } catch (err) {
-                    console.warn(`Could not read .gitignore at ${gitignoreUri.fsPath}:`, err);
-                }
-            }
-        } catch (error) {
-            console.warn('Could not find .gitignore files:', error);
-        }
-
-        return `{${patterns.join(',')}}`;
+    private static buildExcludePattern(): string {
+        // vscode.workspace.findFiles() already respects .gitignore — no need to parse them manually.
+        // EXCLUDE_PATTERNS covers additional directories we want to skip (tests, docs, build outputs, etc.)
+        return `{${EXCLUDE_PATTERNS.join(',')}}`;
     }
 
     /**
@@ -196,14 +113,16 @@ export class WorkflowDetector {
         return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    static async detectInWorkspace(): Promise<vscode.Uri[]> {
+    static async detectInWorkspace(
+        onProgress?: (scanned: number, total: number, found: number) => void
+    ): Promise<vscode.Uri[]> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return [];
 
         const files: vscode.Uri[] = [];
 
         // Build exclusion pattern from .gitignore + common patterns
-        const excludePattern = await this.buildExcludePattern(workspaceFolders[0].uri);
+        const excludePattern = this.buildExcludePattern();
 
         for (const ext of this.FILE_EXTENSIONS) {
             const found = await vscode.workspace.findFiles(
@@ -216,13 +135,19 @@ export class WorkflowDetector {
 
         // Step 1: Detect base LLM files (files with direct LLM SDK usage)
         const baseWorkflowFiles: vscode.Uri[] = [];
+        let scanned = 0;
 
         for (const file of files) {
             const content = await vscode.workspace.fs.readFile(file);
             const text = Buffer.from(content).toString('utf8');
+            scanned++;
 
             if (this.detectWorkflow(text, file.fsPath)) {
                 baseWorkflowFiles.push(file);
+            }
+
+            if (onProgress && (scanned % 50 === 0 || scanned === files.length)) {
+                onProgress(scanned, files.length, baseWorkflowFiles.length);
             }
         }
 
@@ -247,7 +172,7 @@ export class WorkflowDetector {
         if (!workspaceFolders) return [];
 
         const files: vscode.Uri[] = [];
-        const excludePattern = await this.buildExcludePattern(workspaceFolders[0].uri);
+        const excludePattern = this.buildExcludePattern();
 
         for (const ext of this.FILE_EXTENSIONS) {
             const found = await vscode.workspace.findFiles(

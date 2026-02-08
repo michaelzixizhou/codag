@@ -449,6 +449,10 @@ export class WebviewManager {
         this.postMessage({ command: 'showLoading', text: message });
     }
 
+    updateLoadingText(message: string, subtext?: string) {
+        this.postMessage({ command: 'updateLoadingText', text: message, subtext });
+    }
+
     updateProgress(current: number, total: number) {
         this.postMessage({ command: 'updateProgress', current, total });
     }

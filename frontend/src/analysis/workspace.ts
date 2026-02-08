@@ -103,9 +103,7 @@ export async function analyzeWorkspace(
     // Check if workspace is open
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
-        vscode.window.showWarningMessage(
-            'No folder open. Use File > Open Folder to open a project.'
-        );
+        webview.notifyWarning('No folder open. Use File > Open Folder to open a project.');
         return;
     }
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
@@ -117,18 +115,26 @@ export async function analyzeWorkspace(
         // Check if workspace has any source files
         const sourceFileCount = (await WorkflowDetector.getAllSourceFiles()).length;
         if (sourceFileCount === 0) {
-            vscode.window.showWarningMessage(
-                'No source files found (.py, .ts, .js). Open a folder containing code.'
-            );
+            webview.notifyWarning('No source files found (.py, .ts, .js). Open a folder containing code.');
             return;
         }
 
-        const workflowFiles = await WorkflowDetector.detectInWorkspace();
+        webview.updateLoadingText(
+            'Detecting LLM patterns...',
+            `${sourceFileCount.toLocaleString()} source files found`
+        );
+
+        const workflowFiles = await WorkflowDetector.detectInWorkspace((scanned, total, found) => {
+            webview.updateLoadingText(
+                'Detecting LLM patterns...',
+                `${scanned.toLocaleString()} / ${total.toLocaleString()} files scanned · ${found} LLM files found`
+            );
+        });
         pipelineStats.detected.llmFiles = workflowFiles.length;
         log(`Found ${workflowFiles.length} workflow files (LLM import patterns)`);
 
         if (workflowFiles.length === 0) {
-            vscode.window.showWarningMessage(
+            webview.notifyWarning(
                 `Found ${sourceFileCount} source files but no LLM/AI code detected. ` +
                 'Codag visualizes code using OpenAI, Anthropic, Gemini, etc.'
             );
@@ -177,8 +183,10 @@ export async function analyzeWorkspace(
         let httpConnectionsContext = '';
         const runHttpScan = async () => {
             log(`\nScanning all source files for HTTP connections...`);
+            webview.updateLoadingText('Scanning HTTP connections...', `Reading source files`);
             const httpScanSourceFiles = await WorkflowDetector.getAllSourceFiles();
             const httpSourceContents: { path: string; content: string }[] = [];
+            let httpScanned = 0;
 
             for (const uri of httpScanSourceFiles) {
                 const relativePath = vscode.workspace.asRelativePath(uri, false);
@@ -193,9 +201,17 @@ export async function analyzeWorkspace(
                         // Skip files that can't be read
                     }
                 }
+                httpScanned++;
+                if (httpScanned % 100 === 0 || httpScanned === httpScanSourceFiles.length) {
+                    webview.updateLoadingText(
+                        'Scanning HTTP connections...',
+                        `${httpScanned.toLocaleString()} / ${httpScanSourceFiles.length.toLocaleString()} files read`
+                    );
+                }
             }
 
             const allFilesForHttpExtraction = [...allFileContents, ...httpSourceContents];
+            webview.updateLoadingText('Extracting HTTP connections...', `Processing ${allFilesForHttpExtraction.length.toLocaleString()} files`);
             log(`Scanning ${allFilesForHttpExtraction.length} files (${allFileContents.length} LLM + ${httpSourceContents.length} other)`);
 
             const rawHttpStructure = extractRepoStructure(allFilesForHttpExtraction);
@@ -336,8 +352,9 @@ export async function analyzeWorkspace(
                     const newGraphs: any[] = [];
 
                     if (uncachedCount === 0) {
-                        // All files up to date - show cached graph immediately
+                        // All files up to date - load cached graph
                         log(`✓ All ${fileContents.length} files up to date`);
+                        webview.updateLoadingText('Loading cached graph...', `${fileContents.length} files`);
                         const selectedPaths = fileContents.map(f => f.path);
                         const mergedGraph = await cache.getMergedGraph(selectedPaths);
                         webview.show(mergedGraph!);
@@ -361,6 +378,7 @@ export async function analyzeWorkspace(
                     });
 
                     // Show cached graphs immediately while analyzing
+                    webview.updateLoadingText('Loading cached graph...', `${uncachedCount} files need re-analysis`);
                     const allCached = await cache.getMergedGraph();
                     if (allCached && allCached.nodes.length > 0) {
                         log(`Showing ${allCached.nodes.length} cached nodes while analyzing ${uncachedCount} more...`);
@@ -510,6 +528,7 @@ export async function analyzeWorkspace(
         // FIRST RUN: Show file picker
         // If we have cached data, show it BEFORE the file picker
         if (hasCachedData) {
+            webview.updateLoadingText('Loading cached graph...');
             const cachedGraph = await cache.getMergedGraph();
             if (cachedGraph) {
                 webview.show(withHttpEdges(cachedGraph, log)!);

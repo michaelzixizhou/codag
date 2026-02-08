@@ -59,6 +59,10 @@ export function setupMessageHandler(): void {
                 });
                 break;
 
+            case 'updateLoadingText':
+                notifications.updateLoadingText(message.text, message.subtext);
+                break;
+
             case 'updateProgress':
                 // Legacy support - convert to new format
                 notifications.updateProgress({

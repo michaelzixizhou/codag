@@ -97,6 +97,18 @@ class NotificationQueue {
     }
 
     /**
+     * Update loading notification text in-place (no flicker).
+     */
+    updateLoadingText(message: string, subtext?: string): void {
+        const existing = this.items.find(n => n.type === 'loading');
+        if (existing) {
+            existing.message = message;
+            existing.subtext = subtext;
+            this.updateElement(existing);
+        }
+    }
+
+    /**
      * Update progress notification with new data.
      * Uses throttling with pending state to ensure final update is never lost.
      */
