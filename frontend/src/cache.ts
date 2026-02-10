@@ -79,6 +79,7 @@ export interface CachedMetadata {
 
 export class CacheManager {
     private cachePath: vscode.Uri | null = null;
+    private graphPath: vscode.Uri | null = null;
     private files: Record<string, FileCache> = {};
     private crossFileEdges: CrossFileEdge[] = [];
     private workflows: Record<string, WorkflowInfo> = {};
@@ -130,6 +131,7 @@ export class CacheManager {
         const workspaceFolder = workspaceFolders[0];
         const vscodeFolderPath = path.join(workspaceFolder.uri.fsPath, '.vscode');
         this.cachePath = vscode.Uri.file(path.join(vscodeFolderPath, 'codag-cache.json'));
+        this.graphPath = vscode.Uri.file(path.join(vscodeFolderPath, 'codag-graph.json'));
 
         try {
             await vscode.workspace.fs.createDirectory(vscode.Uri.file(vscodeFolderPath));
@@ -206,6 +208,23 @@ export class CacheManager {
     }
 
     /**
+     * Write the merged graph to a standalone JSON file for external consumers (e.g., MCP server).
+     */
+    private async writeGraphFile(graph: WorkflowGraph | null): Promise<void> {
+        if (!this.graphPath) return;
+        try {
+            if (graph) {
+                const content = JSON.stringify(graph, null, 2);
+                await vscode.workspace.fs.writeFile(this.graphPath, Buffer.from(content, 'utf8'));
+            } else {
+                try { await vscode.workspace.fs.delete(this.graphPath); } catch { /* may not exist */ }
+            }
+        } catch (error) {
+            console.error('Failed to write graph file:', error);
+        }
+    }
+
+    /**
      * Force immediate save of any pending changes.
      * Call this on extension deactivation to ensure cache is persisted.
      */
@@ -215,6 +234,7 @@ export class CacheManager {
             this.saveTimer = null;
         }
         await this.saveNow();
+        await this.writeGraphFile(this.lastMergedGraph);
     }
 
     // =========================================================================
@@ -897,6 +917,9 @@ export class CacheManager {
         // Cache for sync access (instant feedback during file changes)
         this.lastMergedGraph = result;
 
+        // Persist for external consumers (MCP server)
+        this.writeGraphFile(result);
+
         return result;
     }
 
@@ -1416,7 +1439,9 @@ export class CacheManager {
         this.files = {};
         this.crossFileEdges = [];
         this.workflows = {};
+        this.lastMergedGraph = null;
         await this.saveNow();
+        await this.writeGraphFile(null);
     }
 
     // =========================================================================

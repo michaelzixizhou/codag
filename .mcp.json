@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codag": {
+      "command": "node",
+      "args": ["packages/mcp-server/dist/index.js", "."]
+    }
+  }
+}
