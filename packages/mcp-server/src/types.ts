@@ -48,4 +48,5 @@ export interface WorkflowGraph {
     edges: WorkflowEdge[];
     llms_detected: string[];
     workflows: WorkflowMetadata[];
+    _workspacePath?: string; // Set at load time, not serialized
 }

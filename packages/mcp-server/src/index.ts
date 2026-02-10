@@ -3,7 +3,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { GraphLoader } from "./graph-loader.js";
-import { listWorkflows, getWorkflow, getNode, getFileContext, initialContext, graphSummaryResource, wrapResult } from "./tools.js";
+import { listWorkflows, getWorkflow, getNode, getFileContext, searchGraph, getTaskContext, graphSummaryResource, wrapResult } from "./tools.js";
 
 const workspacePath = process.argv[2];
 if (!workspacePath) {
@@ -15,7 +15,7 @@ const loader = new GraphLoader(workspacePath);
 
 const server = new McpServer({
     name: "codag",
-    version: "0.2.0",
+    version: "0.1.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -40,26 +40,43 @@ server.resource(
 // ---------------------------------------------------------------------------
 
 server.tool(
-    "initial_context",
-    "Get a compact summary of all workflows, file mappings, and cross-file edges in one call. Call this FIRST when starting any task involving LLM/AI code. Replaces the need for list_workflows + get_workflow + get_file_context chain.",
-    {},
-    async () => ({
-        content: [{ type: "text", text: wrapResult("initial_context", initialContext(loader.getIndex())) }],
+    "get_task_context",
+    "Get LLM workflow files and data flow relevant to your task. ONLY covers LLM/AI code — does not know about non-LLM files, utilities, tests, configs, or partner packages. Always explore the full codebase yourself for those.",
+    {
+        task_description: z.string().describe("Full description of what you need to implement or fix"),
+    },
+    async ({ task_description }) => ({
+        content: [{ type: "text", text: wrapResult("get_task_context", getTaskContext(loader.getIndex(), task_description)) }],
+    })
+);
+
+server.tool(
+    "search_graph",
+    "Search for specific workflows, nodes, or files by keyword. Use get_task_context first — only use this if you need to find something specific not covered by the initial context.",
+    {
+        query: z.string().describe("Search keywords (e.g. 'openai', 'chat model', 'retry')"),
+        limit: z.number().optional().default(15).describe("Max results per category (default 15)"),
+    },
+    async ({ query, limit }) => ({
+        content: [{ type: "text", text: wrapResult("search_graph", searchGraph(loader.getIndex(), query, limit)) }],
     })
 );
 
 server.tool(
     "list_workflows",
-    "List all AI/LLM workflow pipelines. Use initial_context instead for first-time orientation.",
-    {},
-    async () => ({
-        content: [{ type: "text", text: wrapResult("list_workflows", listWorkflows(loader.getIndex())) }],
+    "List workflow pipelines sorted by size. Use search_graph instead to find specific workflows by keyword.",
+    {
+        limit: z.number().optional().default(20).describe("Max workflows to return (default 20)"),
+        offset: z.number().optional().default(0).describe("Skip first N workflows (for pagination)"),
+    },
+    async ({ limit, offset }) => ({
+        content: [{ type: "text", text: wrapResult("list_workflows", listWorkflows(loader.getIndex(), limit, offset)) }],
     })
 );
 
 server.tool(
     "get_workflow",
-    "Get full details of a workflow pipeline: all nodes, edges, and topological order.",
+    "Get full topology of a workflow: nodes, edges, and execution order. Use search_graph first to find the workflow name.",
     { workflow_name: z.string().describe("Workflow name or ID (fuzzy matched)") },
     async ({ workflow_name }) => ({
         content: [{ type: "text", text: wrapResult("get_workflow", getWorkflow(loader.getIndex(), workflow_name)) }],
@@ -77,7 +94,7 @@ server.tool(
 
 server.tool(
     "get_file_context",
-    "Get LLM workflow context for specific files you plan to modify. Returns which pipelines they belong to, nodes, LLM calls, and connected files.",
+    "Get workflow context for specific files you plan to read or modify. Shows which workflows they belong to, what nodes they contain, and connected files.",
     { files: z.array(z.string()).describe("File paths to look up (relative to workspace root)") },
     async ({ files }) => ({
         content: [{ type: "text", text: wrapResult("get_file_context", getFileContext(loader.getIndex(), files)) }],

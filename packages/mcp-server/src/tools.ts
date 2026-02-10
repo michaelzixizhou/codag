@@ -12,7 +12,7 @@ const NO_GRAPH = {
 // Call budget tracking
 // ---------------------------------------------------------------------------
 
-const SOFT_LIMIT = 6; // After this many calls to the same tool, nudge the agent
+const SOFT_LIMIT = 6;
 
 const callCounts = new Map<string, number>();
 
@@ -36,79 +36,246 @@ export function wrapResult(toolName: string, data: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// initial_context — compact one-shot summary
+// Stop words for keyword extraction
 // ---------------------------------------------------------------------------
 
-export function initialContext(index: GraphIndex | null) {
+const STOP_WORDS = new Set([
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "need", "must",
+    "it", "its", "this", "that", "these", "those", "i", "we", "you", "he",
+    "she", "they", "me", "him", "her", "us", "them", "my", "your", "his",
+    "our", "their", "what", "which", "who", "when", "where", "how", "why",
+    "all", "each", "every", "both", "few", "more", "most", "other", "some",
+    "such", "no", "not", "only", "same", "so", "than", "too", "very",
+    "just", "also", "then", "now", "here", "there", "if", "else",
+    "add", "create", "make", "implement", "build", "update", "modify",
+    "change", "use", "using", "new", "existing", "current", "ensure",
+    "support", "specifically", "should", "instead", "mode",
+]);
+
+function extractKeywords(text: string): string[] {
+    return text
+        .toLowerCase()
+        .replace(/[^a-z0-9_\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+}
+
+// ---------------------------------------------------------------------------
+// get_task_context — single-shot context for a task
+// ---------------------------------------------------------------------------
+
+export function getTaskContext(index: GraphIndex | null, taskDescription: string) {
     if (!index) return NO_GRAPH;
+
+    const keywords = extractKeywords(taskDescription);
+    if (keywords.length === 0) {
+        return { error: "no_keywords", message: "Could not extract keywords from task description." };
+    }
 
     const { graph } = index;
 
-    // Compact workflow summaries
-    const workflows = graph.workflows.map((wf) => {
-        const nodes = wf.nodeIds
-            .map((id) => index.nodeById.get(id))
-            .filter(Boolean) as WorkflowNode[];
-        const files = new Set<string>();
-        const llmNodes: Array<{ fn: string; model: string | null; file: string }> = [];
-        for (const n of nodes) {
-            if (n.source?.file) files.add(n.source.file);
-            if (n.type === "llm") {
-                llmNodes.push({
-                    fn: n.source?.function ?? n.label,
-                    model: n.model ?? null,
-                    file: n.source?.file ?? "",
-                });
-            }
+    // Score a string against the extracted keywords
+    function score(text: string): number {
+        const t = text.toLowerCase();
+        let s = 0;
+        for (const kw of keywords) {
+            if (t === kw) s += 10;
+            else if (t.includes(kw)) s += 3;
         }
-        return {
-            name: wf.name,
-            nodes: wf.nodeIds.length,
-            files: [...files],
-            llm_calls: llmNodes,
-        };
-    });
+        return s;
+    }
 
-    // File → workflow mapping (compact)
-    const fileMap: Record<string, string[]> = {};
-    for (const wf of graph.workflows) {
-        for (const nodeId of wf.nodeIds) {
-            const node = index.nodeById.get(nodeId);
-            if (node?.source?.file) {
-                if (!fileMap[node.source.file]) fileMap[node.source.file] = [];
-                if (!fileMap[node.source.file].includes(wf.name)) {
-                    fileMap[node.source.file].push(wf.name);
-                }
-            }
+    // Score every file by aggregating node scores within it
+    const fileScores = new Map<string, number>();
+    const fileNodes = new Map<string, WorkflowNode[]>();
+    for (const [file, nodes] of index.fileToNodes) {
+        let s = score(file) * 2; // file path match is strong signal
+        for (const n of nodes) {
+            s += score(n.label);
+            s += score(n.source?.function ?? "");
+            s += score(n.description ?? "") * 0.5;
+        }
+        if (s > 0) {
+            fileScores.set(file, s);
+            fileNodes.set(file, nodes);
         }
     }
 
-    // Key cross-file edges
-    const crossFileEdges: Array<{ from: string; to: string; label: string | null }> = [];
+    // Top 10 files by score
+    const topFiles = [...fileScores.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+
+    // Build response per file
+    const relevantFiles: Array<{
+        file: string;
+        why: string;
+        key_functions: string[];
+        workflows: string[];
+    }> = [];
+
+    for (const [file] of topFiles) {
+        const nodes = fileNodes.get(file) ?? [];
+        const wfNames = new Set<string>();
+        const functions: string[] = [];
+        const labels: string[] = [];
+
+        for (const n of nodes) {
+            const wf = index.nodeToWorkflow.get(n.id);
+            if (wf) wfNames.add(wf.name);
+            if (n.source?.function && !functions.includes(n.source.function)) {
+                functions.push(n.source.function);
+            }
+            labels.push(n.label);
+        }
+
+        // Build a short "why" from node labels
+        const llmNodes = nodes.filter((n) => n.type === "llm");
+        const decisionNodes = nodes.filter((n) => n.type === "decision");
+        const parts: string[] = [];
+        if (llmNodes.length > 0) parts.push(`${llmNodes.length} LLM call${llmNodes.length > 1 ? "s" : ""}`);
+        if (decisionNodes.length > 0) parts.push(`${decisionNodes.length} decision${decisionNodes.length > 1 ? "s" : ""}`);
+        parts.push(`${nodes.length} nodes`);
+        const why = `Contains ${parts.join(", ")} — ${[...wfNames].slice(0, 3).join(", ")}`;
+
+        relevantFiles.push({
+            file,
+            why,
+            key_functions: functions.slice(0, 8),
+            workflows: [...wfNames].slice(0, 5),
+        });
+    }
+
+    // Trace data flow: find edges between top files
+    const topFileSet = new Set(topFiles.map(([f]) => f));
+    const dataFlow: Array<{ from: string; to: string; via: string }> = [];
+    const seenFlows = new Set<string>();
     for (const edge of graph.edges) {
         const src = index.nodeById.get(edge.source);
         const tgt = index.nodeById.get(edge.target);
-        if (src?.source?.file && tgt?.source?.file && src.source.file !== tgt.source.file) {
-            crossFileEdges.push({
-                from: `${src.source.file}::${src.source.function ?? "?"}`,
-                to: `${tgt.source.file}::${tgt.source.function ?? "?"}`,
-                label: edge.label ?? null,
-            });
+        if (
+            src?.source?.file && tgt?.source?.file &&
+            topFileSet.has(src.source.file) && topFileSet.has(tgt.source.file) &&
+            src.source.file !== tgt.source.file
+        ) {
+            const key = `${src.source.file}→${tgt.source.file}`;
+            if (!seenFlows.has(key)) {
+                seenFlows.add(key);
+                dataFlow.push({
+                    from: `${src.source.file}::${src.source.function ?? src.label}`,
+                    to: `${tgt.source.file}::${tgt.source.function ?? tgt.label}`,
+                    via: edge.label ?? "calls",
+                });
+            }
         }
     }
 
     return {
-        summary: {
-            total_nodes: graph.nodes.length,
-            total_edges: graph.edges.length,
-            total_workflows: graph.workflows.length,
-            llms_detected: graph.llms_detected,
-        },
-        workflows,
-        file_to_workflows: fileMap,
-        cross_file_edges: crossFileEdges.slice(0, 50), // Cap for token efficiency
-        graph_timestamp: new Date(index.timestamp).toISOString(),
-        hint: "Use get_file_context(files) for details on specific files you plan to modify. Use get_workflow(name) for full topology of a specific pipeline.",
+        keywords_extracted: keywords.slice(0, 10),
+        relevant_files: relevantFiles,
+        data_flow_between_files: dataFlow.slice(0, 15),
+        scope: `This graph only covers ${index.fileToNodes.size} files containing LLM/AI workflow code — it knows nothing about the rest of the codebase.`,
+        questions_to_consider: [
+            "What non-LLM files (utilities, configs, partner packages, tests) does your task require?",
+            "Which imports or base classes in these files lead to code outside the graph?",
+            "Are there test files, type definitions, or package configs you need to read or modify?",
+        ],
+    };
+}
+
+// ---------------------------------------------------------------------------
+// search_graph — targeted keyword search across the graph
+// ---------------------------------------------------------------------------
+
+export function searchGraph(index: GraphIndex | null, query: string, limit: number = 15) {
+    if (!index) return NO_GRAPH;
+
+    const q = query.toLowerCase().trim();
+    if (!q) return { error: "empty_query", message: "Provide a search query (e.g. 'retry', 'openai', 'chat model')" };
+
+    const terms = q.split(/\s+/);
+    const { graph } = index;
+
+    // Score function: how well does a string match the query terms?
+    function score(text: string): number {
+        const t = text.toLowerCase();
+        let s = 0;
+        for (const term of terms) {
+            if (t === term) s += 10;           // exact match
+            else if (t.includes(term)) s += 3; // substring match
+        }
+        return s;
+    }
+
+    // Search workflows
+    type WfMatch = { name: string; node_count: number; has_llm: boolean; files: string[]; score: number };
+    const wfMatches: WfMatch[] = [];
+    for (const wf of graph.workflows) {
+        let s = score(wf.name) + score(wf.description ?? "");
+        // Also check if any node in this workflow matches
+        const nodes = wf.nodeIds.map((id) => index.nodeById.get(id)).filter(Boolean) as WorkflowNode[];
+        const files = new Set<string>();
+        let hasLlm = false;
+        for (const n of nodes) {
+            s += score(n.label) * 0.5;
+            s += score(n.source?.function ?? "") * 0.5;
+            if (n.source?.file) {
+                s += score(n.source.file) * 0.3;
+                files.add(n.source.file);
+            }
+            if (n.type === "llm") hasLlm = true;
+        }
+        if (s > 0) {
+            wfMatches.push({ name: wf.name, node_count: wf.nodeIds.length, has_llm: hasLlm, files: [...files].slice(0, 5), score: s });
+        }
+    }
+    wfMatches.sort((a, b) => b.score - a.score);
+
+    // Search nodes directly (for function-level matches)
+    type NodeMatch = { id: string; label: string; type: string; file: string | null; function: string | null; workflow: string | null; score: number };
+    const nodeMatches: NodeMatch[] = [];
+    for (const node of graph.nodes) {
+        const s = score(node.label) + score(node.source?.function ?? "") + score(node.source?.file ?? "") * 0.5 + score(node.description ?? "") * 0.3;
+        if (s > 0) {
+            const wf = index.nodeToWorkflow.get(node.id);
+            nodeMatches.push({
+                id: node.id,
+                label: node.label,
+                type: node.type,
+                file: node.source?.file ?? null,
+                function: node.source?.function ?? null,
+                workflow: wf?.name ?? null,
+                score: s,
+            });
+        }
+    }
+    nodeMatches.sort((a, b) => b.score - a.score);
+
+    // Search files
+    type FileMatch = { file: string; workflows: string[]; node_count: number; score: number };
+    const fileMatches: FileMatch[] = [];
+    for (const [file, nodes] of index.fileToNodes) {
+        const s = score(file);
+        if (s > 0) {
+            const wfs = new Set<string>();
+            for (const n of nodes) {
+                const wf = index.nodeToWorkflow.get(n.id);
+                if (wf) wfs.add(wf.name);
+            }
+            fileMatches.push({ file, workflows: [...wfs], node_count: nodes.length, score: s });
+        }
+    }
+    fileMatches.sort((a, b) => b.score - a.score);
+
+    return {
+        query,
+        workflows: wfMatches.slice(0, limit),
+        nodes: nodeMatches.slice(0, limit),
+        files: fileMatches.slice(0, limit),
+        hint: "Use get_file_context(files) to see how files connect, or get_workflow(name) for full topology.",
     };
 }
 
@@ -121,38 +288,13 @@ export function graphSummaryResource(index: GraphIndex | null): string {
 
     const { graph } = index;
     const lines: string[] = [
-        `# Codag Workflow Graph`,
-        `${graph.nodes.length} nodes, ${graph.edges.length} edges, ${graph.workflows.length} workflows`,
-        `LLMs: ${graph.llms_detected.join(", ") || "none"}`,
+        `# Codag Workflow Context`,
+        `This codebase has a pre-analyzed LLM workflow graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges, ${graph.workflows.length} workflows across ${index.fileToNodes.size} files.`,
+        `LLMs detected: ${graph.llms_detected.join(", ") || "none"}`,
         ``,
-        `## Workflows`,
+        `Call \`get_task_context("your task description")\` to see which LLM workflow files relate to your task.`,
+        `**Important**: This graph ONLY covers LLM/AI workflow code. It knows nothing about non-LLM files, utilities, configs, tests, partner packages, or other infrastructure. Always explore the full codebase yourself.`,
     ];
-
-    for (const wf of graph.workflows) {
-        const nodes = wf.nodeIds
-            .map((id) => index.nodeById.get(id))
-            .filter(Boolean) as WorkflowNode[];
-        const llmCount = nodes.filter((n) => n.type === "llm").length;
-        const files = [...new Set(nodes.map((n) => n.source?.file).filter(Boolean))];
-        lines.push(`- **${wf.name}** (${nodes.length} nodes, ${llmCount} LLM calls) — ${files.join(", ")}`);
-    }
-
-    lines.push("", "## Files with LLM Workflow Code");
-    const fileSet = new Map<string, string[]>();
-    for (const wf of graph.workflows) {
-        for (const nodeId of wf.nodeIds) {
-            const node = index.nodeById.get(nodeId);
-            if (node?.source?.file) {
-                if (!fileSet.has(node.source.file)) fileSet.set(node.source.file, []);
-                if (!fileSet.get(node.source.file)!.includes(wf.name)) {
-                    fileSet.get(node.source.file)!.push(wf.name);
-                }
-            }
-        }
-    }
-    for (const [file, wfs] of fileSet) {
-        lines.push(`- \`${file}\` → ${wfs.join(", ")}`);
-    }
 
     return lines.join("\n");
 }
@@ -161,41 +303,44 @@ export function graphSummaryResource(index: GraphIndex | null): string {
 // list_workflows
 // ---------------------------------------------------------------------------
 
-export function listWorkflows(index: GraphIndex | null) {
+export function listWorkflows(index: GraphIndex | null, limit: number = 20, offset: number = 0) {
     if (!index) return NO_GRAPH;
 
     const { graph } = index;
-    const workflows = graph.workflows.map((wf) => {
+    const all = graph.workflows.map((wf) => {
         const nodes = wf.nodeIds
             .map((id) => index.nodeById.get(id))
             .filter(Boolean) as WorkflowNode[];
-        const files = new Set<string>();
         let hasLlmCalls = false;
         for (const n of nodes) {
-            if (n.source?.file) files.add(n.source.file);
-            if (n.type === "llm") hasLlmCalls = true;
+            if (n.type === "llm") { hasLlmCalls = true; break; }
         }
         return {
-            id: wf.id,
             name: wf.name,
-            description: wf.description ?? null,
             node_count: wf.nodeIds.length,
             has_llm_calls: hasLlmCalls,
-            primary_files: [...files].slice(0, 5),
         };
     });
 
+    // Sort by node count desc so largest/most important workflows come first
+    all.sort((a, b) => b.node_count - a.node_count);
+    const page = all.slice(offset, offset + limit);
+
     return {
-        workflows,
-        total_nodes: graph.nodes.length,
-        total_edges: graph.edges.length,
-        llms_detected: graph.llms_detected,
+        workflows: page,
+        total: all.length,
+        showing: `${offset + 1}-${offset + page.length} of ${all.length}`,
+        hint: page.length < all.length
+            ? `Use search_graph("keywords") to find specific workflows, or list_workflows with offset=${offset + limit} for more.`
+            : undefined,
     };
 }
 
 // ---------------------------------------------------------------------------
 // get_workflow
 // ---------------------------------------------------------------------------
+
+const MAX_WORKFLOW_NODES = 50;
 
 export function getWorkflow(index: GraphIndex | null, workflowName: string) {
     if (!index) return NO_GRAPH;
@@ -210,16 +355,22 @@ export function getWorkflow(index: GraphIndex | null, workflowName: string) {
     );
 
     if (!wf) {
-        const available = graph.workflows.map((w) => w.name);
+        // Don't dump all workflow names for huge graphs
+        const available = graph.workflows
+            .map((w) => ({ name: w.name, nodes: w.nodeIds.length }))
+            .sort((a, b) => b.nodes - a.nodes)
+            .slice(0, 20)
+            .map((w) => w.name);
         return {
             error: "workflow_not_found",
             message: `No workflow matching "${workflowName}"`,
-            available_workflows: available,
+            hint: `Use search_graph("${workflowName}") to find matching workflows.`,
+            top_workflows: available,
         };
     }
 
     const nodeSet = new Set(wf.nodeIds);
-    const nodes = wf.nodeIds
+    const allNodes = wf.nodeIds
         .map((id) => {
             const n = index.nodeById.get(id);
             if (!n) return null;
@@ -231,32 +382,40 @@ export function getWorkflow(index: GraphIndex | null, workflowName: string) {
                 line: n.source?.line ?? null,
                 function: n.source?.function ?? null,
                 model: n.model ?? null,
-                temperature: n.temperature ?? null,
                 description: n.description ?? null,
             };
         })
         .filter(Boolean);
 
+    const truncated = allNodes.length > MAX_WORKFLOW_NODES;
+    // If truncated, prioritize LLM and decision nodes, then first N steps
+    let nodes = allNodes;
+    if (truncated) {
+        const important = allNodes.filter((n) => n!.type === "llm" || n!.type === "decision");
+        const steps = allNodes.filter((n) => n!.type === "step").slice(0, MAX_WORKFLOW_NODES - important.length);
+        nodes = [...important, ...steps];
+    }
+
+    const includedIds = new Set(nodes.map((n) => n!.id));
     const edges = graph.edges
-        .filter((e) => nodeSet.has(e.source) && nodeSet.has(e.target))
+        .filter((e) => nodeSet.has(e.source) && nodeSet.has(e.target) && includedIds.has(e.source) && includedIds.has(e.target))
         .map((e) => ({
             from: e.source,
             to: e.target,
             label: e.label ?? null,
-            condition: e.condition ?? null,
         }));
 
-    const topoOrder = topologicalSort(wf.nodeIds, graph.edges);
+    const topoOrder = topologicalSort([...includedIds], graph.edges);
 
     return {
         workflow: {
-            id: wf.id,
             name: wf.name,
             description: wf.description ?? null,
+            total_nodes: wf.nodeIds.length,
             nodes,
             edges,
             topological_order: topoOrder,
-            components: wf.components ?? [],
+            ...(truncated ? { truncated: true, showing: `${nodes.length} of ${allNodes.length} nodes (LLM/decision nodes prioritized)` } : {}),
         },
     };
 }
@@ -381,6 +540,7 @@ export function getFileContext(index: GraphIndex | null, files: string[]) {
             if (n.source?.file) connectedFiles.delete(n.source.file);
         }
 
+        const connectedList = [...connectedFiles].slice(0, 10);
         results.push({
             file,
             workflows: [...workflowNames],
@@ -398,7 +558,8 @@ export function getFileContext(index: GraphIndex | null, files: string[]) {
                     model: n.model ?? null,
                     line: n.source?.line ?? null,
                 })),
-            connected_files: [...connectedFiles],
+            connected_files: connectedList,
+            ...(connectedFiles.size > 10 ? { more_connected_files: connectedFiles.size - 10 } : {}),
         });
     }
 

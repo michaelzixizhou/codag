@@ -32,6 +32,7 @@ export class GraphLoader {
         try {
             const raw = readFileSync(this.graphPath, "utf-8");
             const graph: WorkflowGraph = JSON.parse(raw);
+            graph._workspacePath = this.workspacePath;
             this.index = this.buildIndex(graph);
         } catch {
             this.index = null;
