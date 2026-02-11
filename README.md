@@ -106,55 +106,51 @@ Don't see yours? [Adding a provider](CONTRIBUTING.md#adding-a-provider) takes 5 
 
 ## Quick Start
 
-### 1. Start the Backend
-
-Codag requires a self-hosted backend for code analysis. You'll need a [Gemini API key](https://aistudio.google.com/apikey) (free tier available).
+### 1. Clone & Setup
 
 ```bash
 git clone https://github.com/michaelzixizhou/codag.git
 cd codag
 cp backend/.env.example backend/.env
-# Add your GEMINI_API_KEY to backend/.env
+# Add your Gemini API key to backend/.env (free tier: https://aistudio.google.com/apikey)
+make setup
+```
+
+### 2. Start the Backend
+
+**With Docker (recommended):**
+```bash
 docker compose up -d
+```
+
+**Without Docker:**
+```bash
+make run
 ```
 
 Verify: `curl http://localhost:52104/health`
 
-<details>
-<summary>Without Docker (macOS/Linux)</summary>
+### 3. Install the Extension
 
+**VS Code:** Search **"Codag"** in Extensions, or install from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=codag.codag).
+
+**Cursor:** Build and install the `.vsix` manually:
 ```bash
-cd backend
-python3.11 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
-
-</details>
-
-### 2. Install the Extension
-
-Search **"Codag"** in VS Code Extensions, or install from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=codag.codag).
-
-<details>
-<summary>Using Cursor?</summary>
-
-Build and install the extension manually:
-
-```bash
-cd frontend
-npm install
-npx vsce package
+cd frontend && npx @vscode/vsce package
 cursor --install-extension codag-*.vsix
 ```
 
-</details>
+### 4. Use It
 
-### 3. Use It
-
-1. `Cmd+Shift+P` → **"Codag: Open"**
+1. `Cmd+Shift+P` / `Ctrl+Shift+P` → **"Codag: Open"**
 2. Select files containing LLM/AI code
 3. Explore the graph
+
+### MCP Server (for Cursor Agent, Claude Code, etc.)
+
+The extension automatically registers a bundled MCP server when activated. This gives coding agents access to your workflow graph — no extra setup required.
+
+The config is written to `.cursor/mcp.json` (Cursor) or `.mcp.json` (Claude Code) in your workspace.
 
 ## How It Works
 

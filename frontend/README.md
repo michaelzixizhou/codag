@@ -61,27 +61,39 @@ Codag does this automatically:
 
 ## Getting Started
 
-### 1. Start the Backend
-
-Codag uses a self-hosted backend powered by Gemini 2.5 Flash. You'll need a [Gemini API key](https://aistudio.google.com/apikey) (free tier available).
+### 1. Clone & Setup
 
 ```bash
 git clone https://github.com/michaelzixizhou/codag.git
 cd codag
 cp backend/.env.example backend/.env
-# Edit backend/.env and add your Gemini API key
+# Add your Gemini API key to backend/.env (free tier: https://aistudio.google.com/apikey)
+make setup
+```
+
+### 2. Start the Backend
+
+**With Docker (recommended):**
+```bash
 docker compose up -d
 ```
 
-Verify it's running: `curl http://localhost:52104/health`
+**Without Docker:**
+```bash
+make run
+```
 
-See the full [setup guide](https://github.com/michaelzixizhou/codag#quick-start) for manual installation.
+Verify: `curl http://localhost:52104/health`
 
-### 2. Use It
+### 3. Use It
 
 1. `Cmd+Shift+P` / `Ctrl+Shift+P` → **"Codag: Open"**
 2. Select files containing LLM/AI code
 3. Explore the graph — click nodes, zoom, pan
+
+### MCP Server
+
+The extension automatically registers a bundled MCP server when activated. This gives coding agents (Cursor Agent, Claude Code, etc.) access to your workflow graph — no extra setup required.
 
 ## Settings
 

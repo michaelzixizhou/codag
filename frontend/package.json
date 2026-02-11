@@ -63,12 +63,14 @@
   "scripts": {
     "vscode:prepublish": "npm run package",
     "copy-wasm": "node scripts/copy-wasm.js",
-    "package": "npm run copy-wasm && npm run package:extension && npm run package:webview",
+    "package": "npm run copy-wasm && npm run package:extension && npm run package:webview && npm run package:mcp",
     "package:extension": "esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --target=es2020 --external:vscode --minify",
     "package:webview": "esbuild src/webview-client/main.ts --bundle --outfile=out/webview-client/main.js --format=iife --target=es2020 --minify",
-    "compile": "npm run copy-wasm && npm run compile:extension && npm run compile:webview",
+    "package:mcp": "esbuild ../packages/mcp-server/src/index.ts --bundle --outfile=out/mcp-server.js --format=esm --platform=node --target=es2022 --banner:js=\"#!/usr/bin/env node\" --minify",
+    "compile": "npm run copy-wasm && npm run compile:extension && npm run compile:webview && npm run compile:mcp",
     "compile:extension": "esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --target=es2020 --external:vscode --sourcemap",
     "compile:webview": "esbuild src/webview-client/main.ts --bundle --outfile=out/webview-client/main.js --format=iife --target=es2020 --sourcemap",
+    "compile:mcp": "esbuild ../packages/mcp-server/src/index.ts --bundle --outfile=out/mcp-server.js --format=esm --platform=node --target=es2022 --banner:js=\"#!/usr/bin/env node\"",
     "watch": "concurrently \"npm run watch:extension\" \"npm run watch:webview\"",
     "watch:extension": "esbuild src/extension.ts --bundle --outfile=out/extension.js --format=cjs --platform=node --target=es2020 --external:vscode --sourcemap --watch",
     "watch:webview": "esbuild src/webview-client/main.ts --bundle --outfile=out/webview-client/main.js --format=iife --target=es2020 --sourcemap --watch"

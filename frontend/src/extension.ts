@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { APIClient } from './api';
 import { CacheManager } from './cache';
 import { WorkflowDetector } from './analyzer';
@@ -38,6 +39,50 @@ const outputChannel = vscode.window.createOutputChannel('Codag');
 let cacheInstance: CacheManager | null = null;
 
 /**
+ * Register the bundled MCP server in the workspace config for the current editor.
+ * Writes .cursor/mcp.json (Cursor) or .mcp.json (Claude Code / other).
+ */
+async function registerMcpServer(extensionPath: string, workspacePath: string): Promise<void> {
+    const mcpServerPath = path.join(extensionPath, 'out', 'mcp-server.js');
+
+    const appName = vscode.env.appName || '';
+    const isCursor = appName.toLowerCase().includes('cursor');
+
+    // Determine config file location
+    const configDir = isCursor
+        ? path.join(workspacePath, '.cursor')
+        : workspacePath;
+    const configFileName = isCursor ? 'mcp.json' : '.mcp.json';
+    const configPath = path.join(configDir, configFileName);
+
+    const configUri = vscode.Uri.file(configPath);
+
+    // Read existing config if present
+    let existing: Record<string, unknown> = {};
+    try {
+        const raw = await vscode.workspace.fs.readFile(configUri);
+        existing = JSON.parse(Buffer.from(raw).toString('utf8'));
+    } catch {
+        // File doesn't exist yet
+    }
+
+    const servers = (existing.mcpServers ?? {}) as Record<string, unknown>;
+    if (servers.codag) {
+        return; // Already registered
+    }
+
+    servers.codag = {
+        command: 'node',
+        args: [mcpServerPath, workspacePath],
+    };
+    existing.mcpServers = servers;
+
+    // Ensure directory exists
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(configDir));
+    await vscode.workspace.fs.writeFile(configUri, Buffer.from(JSON.stringify(existing, null, 2) + '\n', 'utf8'));
+}
+
+/**
  * Log message with timestamp
  */
 function log(message: string): void {
@@ -51,6 +96,14 @@ function log(message: string): void {
 
 export async function activate(context: vscode.ExtensionContext) {
     log('Codag activating...');
+
+    // Register MCP server config for coding agents (Cursor, Claude Code, etc.)
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder) {
+        registerMcpServer(context.extensionPath, workspaceFolder.uri.fsPath)
+            .then(() => log('MCP server registered'))
+            .catch(err => log(`MCP registration skipped: ${err}`));
+    }
 
     // Initialize tree-sitter parser (must happen before any parsing)
     const parserManager = ParserManager.create(context.extensionUri);
